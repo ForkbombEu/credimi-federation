@@ -116,10 +116,15 @@ credimi-federation (one Node.js process)
   library with a URL rebuilt from the configured identifier and the request
   path; the `Host` and `X-Forwarded-*` headers are never read.
 - **Keys.** The Trust Anchor's private federation signing key is a single
-  ES256 JWK file created once by `credimi-federation init`. Startup loads it,
-  validates it (P-256, `alg` ES256, `kid` equals its RFC 7638 thumbprint,
-  private/public halves match, file not group/world accessible) and refuses to
-  start otherwise. Startup never creates or replaces keys.
+  ES256 JWK created once by `credimi-federation init`. It is read either from
+  the file named by `FEDERATION_SIGNING_KEY_PATH` or from the
+  `FEDERATION_SIGNING_KEY` secret variable holding the same JSON; exactly one
+  must be set, so a stale second source can never silently choose the
+  identity. Startup validates it (P-256, `alg` ES256, `kid` equals its RFC 7638
+  thumbprint, private/public halves match, and for a file, not group/world
+  accessible) and refuses to start otherwise. Startup never creates or replaces
+  keys. The variable form exists for platforms such as Coolify where a failing
+  first start leaves no container in which to run `init`.
 - **Membership.** Subordinates are declared in a JSON file holding each
   subordinate's Entity Identifier, pinned public federation JWKS, entity
   types, enabled flag and optional `metadata_policy`/`constraints`. The file
@@ -141,6 +146,8 @@ CLI (`credimi-federation`, also `node dist/cli.js`):
 | `check` | Validate the key and subordinate file exactly as startup does, then exit.                |
 | `jwks`  | Print the Trust Anchor's public JWKS (for out-of-band distribution).                     |
 
+`check` and `jwks` accept either key source.
+
 HTTP (all `GET`, no authentication, no write operations):
 
 | Path                             | Response                                         |
@@ -161,13 +168,14 @@ Environment variables (validated at startup; invalid values abort):
 | Variable                       | Required | Default                          | Meaning                                                    |
 | ------------------------------ | -------- | -------------------------------- | ---------------------------------------------------------- |
 | `FEDERATION_ENTITY_ID`         | yes      | —                                | `https` origin of the Trust Anchor, no path/query/fragment |
-| `FEDERATION_SIGNING_KEY_PATH`  | yes      | —                                | Private ES256 JWK file                                     |
+| `FEDERATION_SIGNING_KEY_PATH`  | one of 2 | —                                | Private ES256 JWK file                                     |
+| `FEDERATION_SIGNING_KEY`       | one of 2 | —                                | Private ES256 JWK JSON, supplied as a secret               |
 | `FEDERATION_SUBORDINATES_PATH` | yes      | —                                | Subordinate registry JSON file                             |
 | `PORT`                         | no       | `3000`                           | TCP port; the service binds `0.0.0.0`                      |
 | `FEDERATION_NAME`              | no       | `OpenID Federation Trust Anchor` | Display name on the website                                |
 
-The Docker image sets `FEDERATION_SIGNING_KEY_PATH=/data/keys/federation.jwk`
-and `FEDERATION_SUBORDINATES_PATH=/data/subordinates.json`.
+The Docker image sets `FEDERATION_SUBORDINATES_PATH=/data/subordinates.json`.
+It sets no key variable, because setting both key sources is refused.
 `.env.example` documents a complete local configuration.
 
 ## Build, format, lint, and test commands
@@ -194,11 +202,15 @@ All commands run through Task; `mise install` provides Node.js, pnpm and Task.
 - Multi-stage `Dockerfile` on `node:26.13.1-alpine`; the runtime stage holds
   only `dist/`, production `node_modules`, `public/` and `openapi/`.
 - Runs as the image's non-root `node` user (uid 1000).
-- `/data` is a declared volume owned by `node`; it holds `keys/federation.jwk`
-  (mode `0600` in a `0700` directory) and `subordinates.json`.
-- The container never generates keys. Provision once with
-  `docker run --rm -v <volume>:/data <image> node dist/cli.js init`.
-  Starting without the key or subordinate file fails with a clear error.
+- `/data` is a declared volume owned by `node`; when the file key source is
+  used it holds `keys/federation.jwk` (mode `0600` in a `0700` directory) and
+  `subordinates.json`.
+- The container never generates keys. Either provision a file once with
+  `docker run --rm -e FEDERATION_SIGNING_KEY_PATH=/data/keys/federation.jwk
+-v <volume>:/data <image> node dist/cli.js init`, or generate the key
+  elsewhere and pass it as the `FEDERATION_SIGNING_KEY` secret (the Coolify
+  setup in the README, which needs no volume). Starting without a key or
+  subordinate file fails with a clear error.
 - `HEALTHCHECK` calls `GET /healthz` on `$PORT`.
 - Behind Coolify (or any TLS-terminating proxy) only the proxy's public
   hostname must match `FEDERATION_ENTITY_ID`; the internal hostname and port

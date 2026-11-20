@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BANNER, runCli } from "../src/commands.js";
@@ -63,5 +63,38 @@ describe("credimi-federation CLI", () => {
     const { code, stderr } = await run(["rotate"], await freshEnv());
     expect(code).toBe(2);
     expect(stderr).toMatch(/Unknown command "rotate"/);
+  });
+});
+
+describe("credimi-federation CLI with FEDERATION_SIGNING_KEY", () => {
+  it("validates and exports the key supplied as a secret variable", async () => {
+    const fileEnv = await freshEnv();
+    const init = await run(["init"], fileEnv);
+    expect(init.stderr).toContain("tr -d ' \\n' <");
+    const path = fileEnv["FEDERATION_SIGNING_KEY_PATH"] ?? "";
+    await writeFile(join(fileEnv["FEDERATION_SUBORDINATES_PATH"] ?? ""), '{"subordinates": []}');
+
+    const secretEnv: NodeJS.ProcessEnv = {
+      ...fileEnv,
+      FEDERATION_SIGNING_KEY_PATH: undefined,
+      FEDERATION_SIGNING_KEY: await readFile(path, "utf8"),
+    };
+    const fromFile = await run(["jwks"], fileEnv);
+    const fromSecret = await run(["jwks"], secretEnv);
+    expect(fromSecret.code).toBe(0);
+    expect(fromSecret.stdout).toBe(fromFile.stdout);
+
+    const check = await run(["check"], secretEnv);
+    expect(check.code).toBe(0);
+    expect(check.stderr).toMatch(/Configuration is valid/);
+  });
+
+  it("refuses to run with both key sources set", async () => {
+    const env = await freshEnv();
+    await run(["init"], env);
+    const both = { ...env, FEDERATION_SIGNING_KEY: '{"kty":"EC"}' };
+    const { code, stderr } = await run(["jwks"], both);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/not both/);
   });
 });

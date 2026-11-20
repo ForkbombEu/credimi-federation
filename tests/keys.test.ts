@@ -48,7 +48,7 @@ describe("loadFederationKey", () => {
   it("loads a generated key with the same kid and public key", async () => {
     const path = join(await tempDir(), "federation.jwk");
     const generated = await generateFederationKey(path);
-    const loaded = await loadFederationKey(path);
+    const loaded = await loadFederationKey({ kind: "file", path });
     expect(loaded.kid).toBe(generated.kid);
     expect(loaded.publicJwk).toEqual(generated.publicJwk);
   });
@@ -56,7 +56,7 @@ describe("loadFederationKey", () => {
   it("publishes only public members", async () => {
     const path = join(await tempDir(), "federation.jwk");
     await generateFederationKey(path);
-    const key = await loadFederationKey(path);
+    const key = await loadFederationKey({ kind: "file", path });
     const [published] = publicJwks(key).keys;
     expect(Object.keys(published ?? {}).sort()).toEqual(
       ["alg", "crv", "kid", "kty", "use", "x", "y"].sort(),
@@ -65,7 +65,9 @@ describe("loadFederationKey", () => {
 
   it("fails clearly when the file is missing and never creates one", async () => {
     const path = join(await tempDir(), "missing.jwk");
-    await expect(loadFederationKey(path)).rejects.toThrow(/not found .*credimi-federation init/);
+    await expect(loadFederationKey({ kind: "file", path })).rejects.toThrow(
+      /not found .*credimi-federation init/,
+    );
     await expect(stat(path)).rejects.toThrow(/ENOENT/);
   });
 
@@ -75,21 +77,21 @@ describe("loadFederationKey", () => {
       const path = join(await tempDir(), "federation.jwk");
       await generateFederationKey(path);
       await chmod(path, 0o644);
-      await expect(loadFederationKey(path)).rejects.toThrow(/chmod 600/);
+      await expect(loadFederationKey({ kind: "file", path })).rejects.toThrow(/chmod 600/);
     },
   );
 
   it("rejects malformed JSON", async () => {
     const path = join(await tempDir(), "federation.jwk");
     await writeKeyFile(path, "{not json");
-    await expect(loadFederationKey(path)).rejects.toThrow(/not valid JSON/);
+    await expect(loadFederationKey({ kind: "file", path })).rejects.toThrow(/not valid JSON/);
   });
 
   it("rejects a public-only key", async () => {
     const path = join(await tempDir(), "federation.jwk");
     const key = await generateFederationKey(join(await tempDir(), "source.jwk"));
     await writeKeyFile(path, key.publicJwk);
-    await expect(loadFederationKey(path)).rejects.toThrow(KeyError);
+    await expect(loadFederationKey({ kind: "file", path })).rejects.toThrow(KeyError);
   });
 
   it("rejects a key on another curve", async () => {
@@ -98,14 +100,14 @@ describe("loadFederationKey", () => {
     const jwk = await exportJWK(privateKey);
     const kid = await calculateJwkThumbprint(jwk, "sha256");
     await writeKeyFile(path, { ...jwk, kid, alg: "ES256", use: "sig" });
-    await expect(loadFederationKey(path)).rejects.toThrow(/P-256/);
+    await expect(loadFederationKey({ kind: "file", path })).rejects.toThrow(/P-256/);
   });
 
   it("rejects a kid that is not the key's thumbprint", async () => {
     const path = join(await tempDir(), "federation.jwk");
     const key = await generateFederationKey(join(await tempDir(), "source.jwk"));
     await writeKeyFile(path, { ...key.privateJwk, kid: "chosen-by-hand" });
-    await expect(loadFederationKey(path)).rejects.toThrow(/thumbprint/);
+    await expect(loadFederationKey({ kind: "file", path })).rejects.toThrow(/thumbprint/);
   });
 
   it("rejects a private scalar that does not belong to the public key", async () => {
@@ -113,6 +115,41 @@ describe("loadFederationKey", () => {
     const a = await generateFederationKey(join(await tempDir(), "a.jwk"));
     const b = await generateFederationKey(join(await tempDir(), "b.jwk"));
     await writeKeyFile(path, { ...a.privateJwk, d: b.privateJwk.d });
-    await expect(loadFederationKey(path)).rejects.toThrow(/do not form a usable ES256 key pair/);
+    await expect(loadFederationKey({ kind: "file", path })).rejects.toThrow(
+      /do not form a usable ES256 key pair/,
+    );
+  });
+});
+
+describe("loadFederationKey from FEDERATION_SIGNING_KEY", () => {
+  const variable = "FEDERATION_SIGNING_KEY";
+
+  it("loads the same key as the file, from the documented one-line form", async () => {
+    const path = join(await tempDir(), "federation.jwk");
+    const generated = await generateFederationKey(path);
+    // Equivalent of the documented `tr -d ' \n' < federation.jwk`.
+    const oneLine = (await readFile(path, "utf8")).replace(/[ \n]/g, "");
+    const loaded = await loadFederationKey({ kind: "env", variable, value: oneLine });
+    expect(loaded.kid).toBe(generated.kid);
+    expect(loaded.publicJwk).toEqual(generated.publicJwk);
+  });
+
+  it("names the variable in errors and never echoes key material", async () => {
+    const key = await generateFederationKey(join(await tempDir(), "source.jwk"));
+    const privateScalar = key.privateJwk.d ?? "";
+    const broken = [
+      "{not json",
+      JSON.stringify({ ...key.privateJwk, kid: "chosen-by-hand" }),
+      JSON.stringify({ ...key.privateJwk, crv: "P-384" }),
+      JSON.stringify({ ...key.privateJwk, extra: privateScalar }),
+    ];
+    for (const value of broken) {
+      const error = await loadFederationKey({ kind: "env", variable, value }).catch(
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(KeyError);
+      expect((error as KeyError).message).toContain(`in ${variable}`);
+      expect((error as KeyError).message).not.toContain(privateScalar);
+    }
   });
 });

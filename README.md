@@ -87,13 +87,18 @@ all of them with `task ci`.
 
 ### Environment variables
 
-| Variable                       | Required | Default                             | Meaning                                                     |
-| ------------------------------ | -------- | ----------------------------------- | ----------------------------------------------------------- |
-| `FEDERATION_ENTITY_ID`         | yes      | —                                   | Public `https` origin, e.g. `https://federation.credimi.io` |
-| `FEDERATION_SIGNING_KEY_PATH`  | yes      | `/data/keys/federation.jwk` (image) | Private ES256 JWK, mode `0600`                              |
-| `FEDERATION_SUBORDINATES_PATH` | yes      | `/data/subordinates.json` (image)   | Subordinate registry                                        |
-| `PORT`                         | no       | `3000`                              | Listening port                                              |
-| `FEDERATION_NAME`              | no       | `OpenID Federation Trust Anchor`    | Website title                                               |
+| Variable                       | Required   | Default                           | Meaning                                                     |
+| ------------------------------ | ---------- | --------------------------------- | ----------------------------------------------------------- |
+| `FEDERATION_ENTITY_ID`         | yes        | —                                 | Public `https` origin, e.g. `https://federation.credimi.io` |
+| `FEDERATION_SIGNING_KEY_PATH`  | one of two | —                                 | File holding the private ES256 JWK, mode `0600`             |
+| `FEDERATION_SIGNING_KEY`       | one of two | —                                 | The private ES256 JWK itself (JSON), as a secret            |
+| `FEDERATION_SUBORDINATES_PATH` | yes        | `/data/subordinates.json` (image) | Subordinate registry                                        |
+| `PORT`                         | no         | `3000`                            | Listening port                                              |
+| `FEDERATION_NAME`              | no         | `OpenID Federation Trust Anchor`  | Website title                                               |
+
+Set exactly one of `FEDERATION_SIGNING_KEY_PATH` and `FEDERATION_SIGNING_KEY`;
+the service refuses to start with both or neither. The variable form passes the
+same key checks as the file, except the file-permission check.
 
 The Entity Identifier comes only from `FEDERATION_ENTITY_ID`. The service never
 reads `Host` or `X-Forwarded-*`, so it can sit behind any TLS-terminating proxy;
@@ -107,26 +112,46 @@ docker build -t credimi-federation .
 docker volume create credimi-federation-data
 
 # Once: provision the key (the container never does this on its own)
-docker run --rm -v credimi-federation-data:/data credimi-federation node dist/cli.js init
+docker run --rm -e FEDERATION_SIGNING_KEY_PATH=/data/keys/federation.jwk \
+  -v credimi-federation-data:/data credimi-federation node dist/cli.js init
 docker run --rm -v credimi-federation-data:/data credimi-federation \
   sh -c 'echo "{\"subordinates\": []}" > /data/subordinates.json'
 
 docker run -d --name credimi-federation -p 3000:3000 \
   -e FEDERATION_ENTITY_ID=https://federation.credimi.io \
+  -e FEDERATION_SIGNING_KEY_PATH=/data/keys/federation.jwk \
   -v credimi-federation-data:/data credimi-federation
 ```
 
 The image runs as the non-root `node` user (uid 1000), declares `/data` as a
 volume, and has a `HEALTHCHECK` on `/healthz`. It refuses to start, with a
-message naming the missing file, if the key or registry is absent, and refuses
+message naming what is missing, if the key or registry is absent, and refuses
 a key file readable by group or others.
 
-On **Coolify**: create an application from this repository with the
-Dockerfile build pack, set `FEDERATION_ENTITY_ID` (and optionally
-`FEDERATION_NAME`), expose port `3000`, attach a persistent storage volume at
-`/data`, and point the domain `federation.credimi.io` at it with HTTPS. Before
-the first start, run `node dist/cli.js init` once in the container (Coolify
-terminal or a one-off command) and create `/data/subordinates.json`.
+### Coolify
+
+A failing first start is rolled back by Coolify, so there is no container
+terminal in which to run `init`. Provision the key on your own machine and give
+it to Coolify as a secret instead:
+
+1. Locally: `FEDERATION_SIGNING_KEY_PATH=./data/keys/federation.jwk task init`.
+   Keep `data/keys/federation.jwk` in encrypted storage; it is your backup.
+2. Print it on one line: `tr -d ' \n' < data/keys/federation.jwk`.
+3. In Coolify, create an application from this repository with the Dockerfile
+   build pack, expose port `3000`, and point `federation.credimi.io` at it with
+   HTTPS.
+4. Environment variables: `FEDERATION_ENTITY_ID=https://federation.credimi.io`,
+   `FEDERATION_SIGNING_KEY=<the one-line JSON>` marked as a secret,
+   `FEDERATION_SUBORDINATES_PATH=/config/subordinates.json`, and optionally
+   `FEDERATION_NAME`. Do not set `FEDERATION_SIGNING_KEY_PATH`.
+5. Storage: add a **File Mount** at `/config/subordinates.json` with the content
+   `{"subordinates": []}`. It holds only public keys, so editing it in Coolify
+   is fine; redeploy after each change.
+6. Deploy, then check that the `kid` on the homepage matches the one `task init`
+   printed.
+
+The private key is then stored, encrypted, in Coolify's database and is visible
+to Coolify administrators. No volume is needed in this setup.
 
 ## Key management
 
@@ -139,11 +164,13 @@ terminal or a one-off command) and create `/data/subordinates.json`.
 - **Backup**: copy `federation.jwk` to encrypted offline storage right after
   `init` (for Docker: `docker run --rm -v credimi-federation-data:/data
 credimi-federation cat /data/keys/federation.jwk > backup.jwk`, then encrypt
-  it and delete the plaintext). Never commit it; `*.jwk` and `data/` are
+  it and delete the plaintext). With `FEDERATION_SIGNING_KEY`, the file you
+  generated locally is the backup. Never commit it; `*.jwk` and `data/` are
   git-ignored.
 - **Restore**: put the file back at `FEDERATION_SIGNING_KEY_PATH`, owned by the
-  service user with mode `0600`, and start. The `kid` printed by `task check`
-  must match the one you distributed.
+  service user with mode `0600`, or paste its one-line form into
+  `FEDERATION_SIGNING_KEY`, and start. The `kid` printed by `task check` must
+  match the one you distributed.
 - **Rotation** (OpenID Federation 1.0 §11.2, not automated yet): publish the new
   public key alongside the current one in the Entity Configuration, keep
   signing with the old key until every relying party has re-fetched the Entity

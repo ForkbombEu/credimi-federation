@@ -18,6 +18,7 @@ import {
   type JWK,
 } from "jose";
 import { z } from "zod";
+import type { SigningKeySource } from "./config.js";
 
 export const FEDERATION_KEY_ALG = "ES256";
 
@@ -97,8 +98,18 @@ export async function generateFederationKey(path: string): Promise<FederationKey
   return toFederationKey(file);
 }
 
-/** Reads and validates the private key file. Throws KeyError on any problem. */
-export async function loadFederationKey(path: string): Promise<FederationKey> {
+/**
+ * Loads and validates the private key from its configured source. Throws
+ * KeyError on any problem; messages never include key material.
+ */
+export async function loadFederationKey(source: SigningKeySource): Promise<FederationKey> {
+  if (source.kind === "env") {
+    return parseFederationKey(source.value, `in ${source.variable}`);
+  }
+  return parseFederationKey(await readKeyFile(source.path), `at ${source.path}`);
+}
+
+async function readKeyFile(path: string): Promise<string> {
   let mode: number;
   try {
     mode = (await stat(path)).mode;
@@ -117,10 +128,8 @@ export async function loadFederationKey(path: string): Promise<FederationKey> {
         `(mode ${(mode & 0o777).toString(8)}). Restrict it with: chmod 600 ${path}`,
     );
   }
-
-  let text: string;
   try {
-    text = await readFile(path, "utf8");
+    return await readFile(path, "utf8");
   } catch (error) {
     if (isErrnoException(error) && error.code === "EACCES") {
       throw new KeyError(
@@ -130,16 +139,20 @@ export async function loadFederationKey(path: string): Promise<FederationKey> {
     }
     throw error;
   }
+}
+
+/** `where` names the source in messages, e.g. "at /data/keys/federation.jwk". */
+async function parseFederationKey(text: string, where: string): Promise<FederationKey> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new KeyError(`Federation signing key at ${path} is not valid JSON.`);
+    throw new KeyError(`Federation signing key ${where} is not valid JSON.`);
   }
   const result = PrivateKeyFileSchema.safeParse(parsed);
   if (!result.success) {
     throw new KeyError(
-      `Federation signing key at ${path} must be a private EC P-256 JWK with ` +
+      `Federation signing key ${where} must be a private EC P-256 JWK with ` +
         `kty, crv, x, y, d, kid, alg "ES256" and use "sig": ${z.prettifyError(result.error)}`,
     );
   }
@@ -151,12 +164,12 @@ export async function loadFederationKey(path: string): Promise<FederationKey> {
   );
   if (thumbprint !== file.kid) {
     throw new KeyError(
-      `Federation signing key at ${path} has kid "${file.kid}" but its RFC 7638 thumbprint is "${thumbprint}".`,
+      `Federation signing key ${where} has kid "${file.kid}" but its RFC 7638 thumbprint is "${thumbprint}".`,
     );
   }
 
   const key = toFederationKey(file);
-  await assertKeyPairMatches(key, path);
+  await assertKeyPairMatches(key, where);
   return key;
 }
 
@@ -179,7 +192,7 @@ function toFederationKey(file: PrivateKeyFile): FederationKey {
 }
 
 /** Signs a probe with the private half and verifies it with the public half. */
-async function assertKeyPairMatches(key: FederationKey, path: string): Promise<void> {
+async function assertKeyPairMatches(key: FederationKey, where: string): Promise<void> {
   try {
     const privateKey = await importJWK(key.privateJwk, FEDERATION_KEY_ALG);
     const publicKey = await importJWK(key.publicJwk, FEDERATION_KEY_ALG);
@@ -189,7 +202,7 @@ async function assertKeyPairMatches(key: FederationKey, path: string): Promise<v
     await compactVerify(probe, publicKey);
   } catch {
     throw new KeyError(
-      `Federation signing key at ${path} is invalid: its private and public parts do not form a usable ES256 key pair.`,
+      `Federation signing key ${where} is invalid: its private and public parts do not form a usable ES256 key pair.`,
     );
   }
 }

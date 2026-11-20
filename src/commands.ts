@@ -2,7 +2,7 @@
  * CLI commands. Kept separate from the executable wrapper so tests can run
  * them in-process with their own environment and output streams.
  */
-import { ConfigError, loadConfig, requireEnv } from "./config.js";
+import { ConfigError, loadConfig, requireEnv, signingKeySource } from "./config.js";
 import { generateFederationKey, KeyError, loadFederationKey, publicJwks } from "./keys.js";
 import { loadSubordinates, SubordinateConfigError } from "./subordinates.js";
 
@@ -26,6 +26,9 @@ Commands:
   check   Validate the signing key and configuration exactly as startup does.
   jwks    Print the public federation JWK Set (JSON) to standard output.
   help    Show this message.
+
+The signing key is read from FEDERATION_SIGNING_KEY_PATH (a file) or from
+FEDERATION_SIGNING_KEY (the private JWK JSON); set exactly one of them.
 `;
 
 /** Runs one command and returns the process exit code. */
@@ -48,13 +51,15 @@ export async function runCli(
         const key = await generateFederationKey(path);
         io.stderr(
           `Created ES256 federation signing key\n  path: ${path}\n  kid:  ${key.kid}\n` +
-            "Back up this file now; it is the federation's identity.\n",
+            "Back up this file now; it is the federation's identity.\n" +
+            "To supply it as the FEDERATION_SIGNING_KEY secret instead, use the file's content on one line:\n" +
+            `  tr -d ' \\n' < ${path}\n`,
         );
         return 0;
       }
       case "check": {
         const config = loadConfig(env);
-        const key = await loadFederationKey(config.signingKeyPath);
+        const key = await loadFederationKey(config.signingKey);
         const subordinates = await loadSubordinates(config.subordinatesPath, {
           entityId: config.entityId,
           key,
@@ -67,7 +72,7 @@ export async function runCli(
         return 0;
       }
       case "jwks": {
-        const key = await loadFederationKey(requireEnv(env, "FEDERATION_SIGNING_KEY_PATH"));
+        const key = await loadFederationKey(signingKeySource(env));
         io.stdout(`${JSON.stringify(publicJwks(key), null, 2)}\n`);
         return 0;
       }

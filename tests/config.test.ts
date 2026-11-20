@@ -12,7 +12,7 @@ describe("loadConfig", () => {
     expect(loadConfig(baseEnv)).toEqual({
       entityId: "https://federation.credimi.io",
       port: 3000,
-      signingKeyPath: "/data/keys/federation.jwk",
+      signingKey: { kind: "file", path: "/data/keys/federation.jwk" },
       subordinatesPath: "/data/subordinates.json",
       federationName: "OpenID Federation Trust Anchor",
     });
@@ -24,7 +24,7 @@ describe("loadConfig", () => {
     expect(config.federationName).toBe("Credimi Test");
   });
 
-  it.each(["FEDERATION_ENTITY_ID", "FEDERATION_SIGNING_KEY_PATH", "FEDERATION_SUBORDINATES_PATH"])(
+  it.each(["FEDERATION_ENTITY_ID", "FEDERATION_SUBORDINATES_PATH"])(
     "fails clearly when %s is missing",
     (name) => {
       const env: Record<string, string> = { ...baseEnv };
@@ -32,6 +32,31 @@ describe("loadConfig", () => {
       expect(() => loadConfig(env)).toThrow(new ConfigError(`${name} is required but not set.`));
     },
   );
+
+  it("reads the signing key from FEDERATION_SIGNING_KEY instead of a file", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      FEDERATION_SIGNING_KEY_PATH: undefined,
+      FEDERATION_SIGNING_KEY: ' {"kty":"EC"} ',
+    });
+    expect(config.signingKey).toEqual({
+      kind: "env",
+      variable: "FEDERATION_SIGNING_KEY",
+      value: '{"kty":"EC"}',
+    });
+  });
+
+  it("refuses two signing key sources rather than picking one", () => {
+    expect(() => loadConfig({ ...baseEnv, FEDERATION_SIGNING_KEY: '{"kty":"EC"}' })).toThrow(
+      /either FEDERATION_SIGNING_KEY_PATH or FEDERATION_SIGNING_KEY, not both/,
+    );
+  });
+
+  it("names both options when no signing key source is set", () => {
+    expect(() => loadConfig({ ...baseEnv, FEDERATION_SIGNING_KEY_PATH: "" })).toThrow(
+      /Set FEDERATION_SIGNING_KEY_PATH .* or FEDERATION_SIGNING_KEY/,
+    );
+  });
 
   it.each(["0", "65536", "80a", "-1"])("rejects PORT=%s", (port) => {
     expect(() => loadConfig({ ...baseEnv, PORT: port })).toThrow(ConfigError);

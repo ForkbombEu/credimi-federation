@@ -31,15 +31,16 @@ export interface Fixture {
 /** A Trust Anchor configuration with a freshly generated key on disk. */
 export async function createFixture(overrides: Partial<AppConfig> = {}): Promise<Fixture> {
   const dir = await tempDir();
+  const keyPath = join(dir, "keys", "federation.jwk");
   const config: AppConfig = {
     entityId: ENTITY_ID,
     port: 3000,
-    signingKeyPath: join(dir, "keys", "federation.jwk"),
+    signingKey: { kind: "file", path: keyPath },
     subordinatesPath: join(dir, "subordinates.json"),
     federationName: "Test Federation",
     ...overrides,
   };
-  const key = await generateFederationKey(config.signingKeyPath);
+  const key = await generateFederationKey(keyPath);
   return { dir, config, key };
 }
 

@@ -98,7 +98,7 @@ describe("GET /.well-known/openid-federation", () => {
     const firstJwt = (await before.inject({ method: "GET", url: WELL_KNOWN })).body;
     await before.close();
 
-    const reloaded = await loadFederationKey(config.signingKeyPath);
+    const reloaded = await loadFederationKey(config.signingKey);
     const after = await buildApp({ config, key: reloaded, subordinates: [] });
     const secondJwt = (await after.inject({ method: "GET", url: WELL_KNOWN })).body;
 

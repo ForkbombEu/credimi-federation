@@ -10,7 +10,7 @@ import { loadSubordinates, SubordinateConfigError } from "./subordinates.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const key = await loadFederationKey(config.signingKeyPath);
+  const key = await loadFederationKey(config.signingKey);
   const subordinates = await loadSubordinates(config.subordinatesPath, {
     entityId: config.entityId,
     key,

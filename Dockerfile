@@ -2,8 +2,11 @@
 #
 # credimi-federation — OpenID Federation 1.0 Trust Anchor.
 #
-# The image never creates keys. Provision the signing key once into the /data
-# volume with `node dist/cli.js init` (see README), then start normally.
+# The image never creates keys. Supply the signing key either as the
+# FEDERATION_SIGNING_KEY secret (private JWK JSON) or as a file named by
+# FEDERATION_SIGNING_KEY_PATH, e.g. /data/keys/federation.jwk created once with
+# `node dist/cli.js init` (see README). No default is set for either, because
+# setting both is refused.
 
 ARG NODE_IMAGE=node:26.13.1-alpine
 ARG PNPM_VERSION=12.21.0
@@ -28,7 +31,6 @@ RUN pnpm install --frozen-lockfile --prod
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production \
     PORT=3000 \
-    FEDERATION_SIGNING_KEY_PATH=/data/keys/federation.jwk \
     FEDERATION_SUBORDINATES_PATH=/data/subordinates.json
 WORKDIR /app
 COPY --from=production-deps /app/node_modules ./node_modules

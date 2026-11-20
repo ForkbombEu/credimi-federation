@@ -4,11 +4,19 @@
  * headers.
  */
 
+/**
+ * Where the private federation signing key comes from: a file on a
+ * persistent volume, or a secret environment variable holding the JWK.
+ */
+export type SigningKeySource =
+  | { readonly kind: "file"; readonly path: string }
+  | { readonly kind: "env"; readonly variable: string; readonly value: string };
+
 export interface AppConfig {
   /** Normalized Entity Identifier: an https origin without a trailing slash. */
   readonly entityId: string;
   readonly port: number;
-  readonly signingKeyPath: string;
+  readonly signingKey: SigningKeySource;
   readonly subordinatesPath: string;
   readonly federationName: string;
 }
@@ -19,15 +27,41 @@ export class ConfigError extends Error {
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_FEDERATION_NAME = "OpenID Federation Trust Anchor";
+const KEY_PATH_VARIABLE = "FEDERATION_SIGNING_KEY_PATH";
+const KEY_VARIABLE = "FEDERATION_SIGNING_KEY";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     entityId: parseEntityId(requireEnv(env, "FEDERATION_ENTITY_ID")),
     port: parsePort(env["PORT"]),
-    signingKeyPath: requireEnv(env, "FEDERATION_SIGNING_KEY_PATH"),
+    signingKey: signingKeySource(env),
     subordinatesPath: requireEnv(env, "FEDERATION_SUBORDINATES_PATH"),
     federationName: optionalEnv(env, "FEDERATION_NAME") ?? DEFAULT_FEDERATION_NAME,
   };
+}
+
+/**
+ * Exactly one of FEDERATION_SIGNING_KEY_PATH and FEDERATION_SIGNING_KEY must
+ * be set. Both set is an error rather than a precedence rule, so a stale
+ * variable can never silently decide which identity the service uses.
+ */
+export function signingKeySource(env: NodeJS.ProcessEnv): SigningKeySource {
+  const path = optionalEnv(env, KEY_PATH_VARIABLE);
+  const value = optionalEnv(env, KEY_VARIABLE);
+  if (path !== undefined && value !== undefined) {
+    throw new ConfigError(
+      `Set either ${KEY_PATH_VARIABLE} or ${KEY_VARIABLE}, not both: they are two sources for the same signing key.`,
+    );
+  }
+  if (path !== undefined) {
+    return { kind: "file", path };
+  }
+  if (value !== undefined) {
+    return { kind: "env", variable: KEY_VARIABLE, value };
+  }
+  throw new ConfigError(
+    `Set ${KEY_PATH_VARIABLE} to the signing key file, or ${KEY_VARIABLE} to the private JWK JSON.`,
+  );
 }
 
 export function requireEnv(env: NodeJS.ProcessEnv, name: string): string {

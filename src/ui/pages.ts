@@ -46,7 +46,7 @@ export interface InspectModel extends SiteInfo {
   readonly payload: unknown;
 }
 
-type Section = "home" | "docs" | "inspect";
+export type Section = "home" | "docs" | "inspect" | "admin";
 
 export function inspectUrl(subject?: string): string {
   return subject === undefined ? "/inspect" : `/inspect?sub=${encodeURIComponent(subject)}`;
@@ -282,7 +282,8 @@ export function docsPage(site: SiteInfo): string {
   });
 }
 
-function layout(
+/** The shared page shell; also used by the admin pages in ./admin.ts. */
+export function layout(
   site: SiteInfo,
   page: { title: string; section: Section; body: SafeHtml; head?: SafeHtml },
 ): string {

@@ -102,9 +102,11 @@ Send the federation operator, over a channel the operator already trusts
 - the entity types it will publish.
 
 The operator adds an entry to the registry file (see the README's
-"Registering a subordinate"), runs `task check`, and restarts the service.
-Before enabling the entry, the operator compares the `kid` values with those in
-the subordinate's live Entity Configuration. A reachable, self-signed Entity
+"Registering a subordinate"), runs `task check`, and restarts the service, or,
+on a deployment with the admin area enabled, adds it as a disabled entry at
+`/admin/new`. Before enabling the entry, the operator compares the `kid` values
+with those in the subordinate's live Entity Configuration; the admin area's
+**Check live keys** page does this comparison. A reachable, self-signed Entity
 Configuration is never enough on its own: Trust Chain validation fails if the
 Entity Configuration is signed with a key the Trust Anchor did not pin.
 

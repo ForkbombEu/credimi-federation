@@ -8,11 +8,15 @@ import fastifyStatic from "@fastify/static";
 import type { TrustAnchor } from "@oidfed/authority";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { decodeJwt, decodeProtectedHeader } from "jose";
+import { adminRoutes } from "./admin.js";
 import type { AppConfig } from "./config.js";
 import { FederationPath, federationEndpoints } from "./federation.js";
+import type { Fetch } from "./keycheck.js";
 import type { FederationKey } from "./keys.js";
 import { loadOpenApi } from "./openapi.js";
 import { Registry } from "./registry.js";
+import { sendPage } from "./responses.js";
+import { AdminSessions } from "./sessions.js";
 import type { Subordinate } from "./subordinates.js";
 import {
   docsPage,
@@ -33,6 +37,8 @@ export interface AppDependencies {
 
 export interface AppOptions {
   readonly logger?: boolean;
+  /** Used by the admin "Check live keys" page; tests inject a stub. */
+  readonly fetch?: Fetch;
 }
 
 const PUBLIC_DIR = fileURLToPath(new URL("../public/", import.meta.url));
@@ -225,6 +231,20 @@ export async function buildApp(
     return federationError(reply, 500, "server_error", "The server could not handle the request.");
   });
 
+  // --- Admin area (registered last so it inherits the handlers above) ---
+  const { adminPassword } = config;
+  if (adminPassword !== undefined) {
+    await app.register((scope, _options, done) => {
+      adminRoutes(scope, {
+        registry,
+        sessions: new AdminSessions(adminPassword),
+        site,
+        fetch: options.fetch ?? fetch,
+      });
+      done();
+    });
+  }
+
   await app.ready();
   return app;
 }
@@ -252,18 +272,6 @@ async function forwardToTrustAnchor(
     reply.header(name, value);
   });
   return reply.send(await response.text());
-}
-
-function sendPage(reply: FastifyReply, status: number, csp: string, body: string): FastifyReply {
-  return reply
-    .code(status)
-    .header("content-security-policy", csp)
-    .header("x-content-type-options", "nosniff")
-    .header("referrer-policy", "no-referrer")
-    .header("x-frame-options", "DENY")
-    .header("cache-control", "no-store")
-    .type("text/html; charset=utf-8")
-    .send(body);
 }
 
 /** OpenID Federation 1.0 §8.9 error response. */

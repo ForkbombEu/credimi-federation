@@ -26,8 +26,11 @@ What it does:
 - Signs **Subordinate Statements** about registered entities at
   `/federation_fetch`, pinning each subordinate's approved public keys.
 - Lists its subordinates at `/federation_list`.
-- Shows its configuration on a read-only website and documents its API with
-  OpenAPI 3.1 and Stoplight Elements.
+- Shows its configuration on a read-only public website and documents its API
+  with OpenAPI 3.1 and Stoplight Elements.
+- Optionally, for demo and testing deployments, offers a password-protected
+  **admin area** at `/admin` to add, edit, enable, disable and delete
+  subordinates without editing files or restarting.
 
 ```text
 credimi-federation
@@ -50,7 +53,8 @@ Identifier, Entity Configuration and federation keys.
   `@oidfed/core` 2.0.0 build and sign every Entity Statement (OpenID
   Federation 1.0 final). No federation logic or cryptography is hand-written.
 - `jose` generates the ES256 key and computes its RFC 7638 thumbprint `kid`.
-- No database: membership is a validated JSON file; identity is one key file.
+- No database: membership is a validated JSON file, edited by hand or through
+  the optional admin area; identity is one key file.
 - Server-rendered HTML with the Credimi brand assets; no frontend framework.
 - Tests: Vitest. The end-to-end test builds a Trust Chain from a locally
   generated subordinate and verifies it with `@openid-federation/core`
@@ -95,6 +99,7 @@ all of them with `task ci`.
 | `FEDERATION_SUBORDINATES_PATH` | yes        | `/data/subordinates.json` (image) | Subordinate registry                                        |
 | `PORT`                         | no         | `3000`                            | Listening port                                              |
 | `FEDERATION_NAME`              | no         | `OpenID Federation Trust Anchor`  | Website title                                               |
+| `FEDERATION_ADMIN_PASSWORD`    | no         | — (admin area off)                | Secret of at least 16 characters; enables `/admin`          |
 
 Set exactly one of `FEDERATION_SIGNING_KEY_PATH` and `FEDERATION_SIGNING_KEY`;
 the service refuses to start with both or neither. The variable form passes the
@@ -125,8 +130,9 @@ docker run -d --name credimi-federation -p 3000:3000 \
 
 The image runs as the non-root `node` user (uid 1000), declares `/data` as a
 volume, and has a `HEALTHCHECK` on `/healthz`. It refuses to start, with a
-message naming what is missing, if the key or registry is absent, and refuses
-a key file readable by group or others.
+message naming what is missing, if the key or registry is absent (a missing
+registry is allowed when the admin area is enabled), and refuses a key file
+readable by group or others.
 
 ### Coolify
 
@@ -152,6 +158,24 @@ it to Coolify as a secret instead:
 
 The private key is then stored, encrypted, in Coolify's database and is visible
 to Coolify administrators. No volume is needed in this setup.
+
+#### Coolify with the admin area (demo and testing)
+
+To manage members from the browser instead of the File Mount, change steps 4
+and 5:
+
+- Environment variables: also set `FEDERATION_ADMIN_PASSWORD` as a secret
+  (generate one with `openssl rand -base64 24`), and set
+  `FEDERATION_SUBORDINATES_PATH=/data/subordinates.json`.
+- Storage: instead of the File Mount, add a **Volume Mount** at `/data`. The
+  registry file is created there on the first save. A File Mount cannot be
+  used: the service replaces the file atomically on every change, which a
+  single-file mount does not allow, and Coolify would rewrite it on the next
+  deploy anyway.
+
+Then sign in at `https://federation.credimi.io/admin/login`. For a production
+federation, leave the admin area off and keep the registry in Git, validated
+by `task check` in CI.
 
 ## Key management
 
@@ -196,10 +220,11 @@ direct exchange. The website lists the current key IDs so they can be compared.
 ## Registering a subordinate
 
 Membership is the JSON file at `FEDERATION_SUBORDINATES_PATH`; there is no
-registration endpoint. Each entry pins the subordinate's **public** federation
-keys, obtained from its operator over a trusted channel — never from its
-reachable Entity Configuration alone. See
-[config/subordinates.example.json](config/subordinates.example.json).
+public registration endpoint. Each entry pins the subordinate's **public**
+federation keys, obtained from its operator over a trusted channel — never from
+its reachable Entity Configuration alone. Edit the file and restart, or use the
+admin area (see [Quick GUI guide](#admin-area)), which writes the same file.
+See [config/subordinates.example.json](config/subordinates.example.json).
 
 | Member            | Required | Meaning                                                                                 |
 | ----------------- | -------- | --------------------------------------------------------------------------------------- |
@@ -212,7 +237,9 @@ reachable Entity Configuration alone. See
 
 The file is validated on start and by `task check`; duplicates, private key
 members, the Trust Anchor's own key, unknown members and invalid policies are
-rejected and the service does not start. Restart after editing.
+rejected and the service does not start. Restart after editing by hand. The
+admin area applies the same validation to every change and refuses to save an
+invalid one.
 
 ## Quick GUI guide
 
@@ -239,8 +266,37 @@ registered subordinate with its entity types, status and key IDs.
 (pinned `9.0.29`); "Send API Request" calls this deployment directly.
 **OpenAPI** links the raw document.
 
-The website is read-only: no authentication, no forms, no administrative
-actions.
+The public website is read-only: no authentication, no forms, no
+administrative actions, and no link to the admin area.
+
+### Admin area
+
+Present only when `FEDERATION_ADMIN_PASSWORD` is set; meant for demo and
+testing deployments.
+
+- **Sign in** at `/admin/login` with the admin password. The session lasts
+  8 hours or until **Sign out** in the admin bar or a restart. After 10 wrong
+  passwords in a minute, sign-in is refused until the minute is over.
+- **Registry** (`/admin`) lists every subordinate with its entity types,
+  status and key IDs, and the actions **Edit**, **Check live keys**,
+  **Enable**/**Disable** and **Delete**.
+- **Add subordinate** asks for the Entity Identifier, entity types (separated
+  by spaces or commas), the public keys exactly as the subordinate's operator
+  sent them (a JWK Set, an array of JWKs or one JWK), and optionally a metadata
+  policy and constraints as JSON. New entries start disabled unless you tick
+  **Enabled**. If anything is invalid, nothing is saved and the form lists the
+  problems.
+- **Check live keys** fetches the subordinate's Entity Configuration and
+  reports whether it is reachable, self-issued, signed with a pinned key,
+  publishing the same keys that are pinned, naming this Trust Anchor in
+  `authority_hints`, and unexpired. It never changes the registry. Run it
+  before enabling an entry.
+- **Delete** asks for confirmation first. To stop vouching for an entity but
+  keep its entry, disable it instead.
+
+Every saved change is live immediately — fetch, list and the homepage serve
+the new registry without a restart — and is logged with the action and the
+Entity Identifier.
 
 ## CLI examples
 

@@ -171,6 +171,28 @@ pre.jwt code {
   color: var(--info);
 }
 
+.alert-success {
+  color: var(--success-border);
+}
+
+.alert-destructive {
+  color: var(--destructive);
+}
+
+.alert code {
+  overflow-wrap: anywhere;
+}
+
+.issue-list {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+}
+
+/* zod reports multi-line issues ("✖ … → at …"); keep their line breaks. */
+.issue-list li {
+  white-space: pre-line;
+}
+
 .alert-icon {
   flex: 0 0 auto;
   width: 18px;
@@ -192,6 +214,129 @@ pre.jwt code {
 .api-docs elements-api {
   display: block;
   height: calc(100vh - var(--topbar-height));
+}
+
+/* --- Admin area --- */
+.admin-bar {
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-bar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  max-width: var(--max-width);
+  margin-inline: auto;
+  padding: var(--space-2) var(--space-6);
+}
+
+.admin-bar-title {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--brand-primary);
+}
+
+.login-card {
+  max-width: 420px;
+  margin: var(--space-10) auto;
+}
+
+.admin-form {
+  display: grid;
+  gap: var(--space-5);
+  max-width: 80ch;
+}
+
+.field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.field label {
+  font-size: var(--fs-base);
+  font-weight: 500;
+}
+
+.field-hint {
+  font-size: var(--fs-sm);
+  color: var(--fg-subtle);
+}
+
+/* DESIGN.md §11 inputs; the brand sheet styles only text and search fields. */
+input[type="password"],
+textarea {
+  font-size: var(--fs-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--fg);
+  width: 100%;
+  transition:
+    border-color 200ms ease-out,
+    box-shadow 200ms ease-out;
+}
+
+input[type="password"] {
+  font-family: var(--font-sans);
+  height: 36px;
+  padding: 0 var(--space-4);
+}
+
+textarea {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  padding: var(--space-3) var(--space-4);
+  resize: vertical;
+}
+
+input[type="password"]:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 3px oklch(0.2955 0.1659 277.31 / 0.18);
+}
+
+.field-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.field-check input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--brand-primary);
+}
+
+.field-check label {
+  font-weight: 400;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  font-size: var(--fs-sm);
+}
+
+.status-fail {
+  background: var(--destructive-bg);
+  color: var(--destructive);
+}
+
+.status-fail::before {
+  background: var(--destructive);
 }
 
 /* --- Data tables become labelled rows on narrow screens --- */

@@ -60,14 +60,16 @@ export async function runCli(
       case "check": {
         const config = loadConfig(env);
         const key = await loadFederationKey(config.signingKey);
-        const subordinates = await loadSubordinates(config.subordinatesPath, {
-          entityId: config.entityId,
-          key,
-        });
+        const subordinates = await loadSubordinates(
+          config.subordinatesPath,
+          { entityId: config.entityId, key },
+          { missingIsEmpty: config.adminPassword !== undefined },
+        );
         const enabled = subordinates.filter((entry) => entry.enabled).length;
         io.stderr(
           `Configuration is valid\n  entity id:    ${config.entityId}\n  kid:          ${key.kid}\n` +
-            `  subordinates: ${subordinates.length} registered, ${enabled} enabled\n`,
+            `  subordinates: ${subordinates.length} registered, ${enabled} enabled\n` +
+            `  admin area:   ${config.adminPassword === undefined ? "off" : "on"}\n`,
         );
         return 0;
       }

@@ -9,9 +9,10 @@ import type { TrustAnchor } from "@oidfed/authority";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { decodeJwt, decodeProtectedHeader } from "jose";
 import type { AppConfig } from "./config.js";
-import { createTrustAnchor, FederationPath, federationEndpoints } from "./federation.js";
+import { FederationPath, federationEndpoints } from "./federation.js";
 import type { FederationKey } from "./keys.js";
 import { loadOpenApi } from "./openapi.js";
+import { Registry } from "./registry.js";
 import type { Subordinate } from "./subordinates.js";
 import {
   docsPage,
@@ -70,11 +71,11 @@ export async function buildApp(
     done(null);
   });
 
-  const trustAnchor = await createTrustAnchor({
-    entityId: config.entityId,
-    key: deps.key,
-    subordinates: deps.subordinates,
-  });
+  // Read through on every request: an admin change replaces the TrustAnchor.
+  const registry = await Registry.create(
+    { entityId: config.entityId, key: deps.key, path: config.subordinatesPath },
+    deps.subordinates,
+  );
   const openApi = await loadOpenApi(config.entityId);
   const site: SiteInfo = { federationName: config.federationName, entityId: config.entityId };
   const docsCsp = [
@@ -92,7 +93,7 @@ export async function buildApp(
   // --- OpenID Federation endpoints ---
   for (const path of FEDERATION_ROUTES) {
     app.get(path, (request, reply) =>
-      forwardToTrustAnchor(trustAnchor, config.entityId, path, request, reply),
+      forwardToTrustAnchor(registry.trustAnchor, config.entityId, path, request, reply),
     );
     app.route({
       method: [...UNSUPPORTED_METHODS],
@@ -125,7 +126,7 @@ export async function buildApp(
   );
 
   app.get("/", async (_request, reply) => {
-    const entityConfiguration = decodeJwt(await trustAnchor.getEntityConfiguration());
+    const entityConfiguration = decodeJwt(await registry.trustAnchor.getEntityConfiguration());
     return sendPage(
       reply,
       200,
@@ -145,7 +146,7 @@ export async function buildApp(
           issuedAt: entityConfiguration.iat ?? 0,
           expiresAt: entityConfiguration.exp ?? 0,
         },
-        subordinates: deps.subordinates,
+        subordinates: registry.subordinates,
       }),
     );
   });
@@ -153,7 +154,7 @@ export async function buildApp(
   app.get("/inspect", async (request, reply) => {
     const { sub } = request.query as { sub?: unknown };
     if (sub === undefined) {
-      const jwt = await trustAnchor.getEntityConfiguration();
+      const jwt = await registry.trustAnchor.getEntityConfiguration();
       return sendPage(
         reply,
         200,
@@ -175,7 +176,7 @@ export async function buildApp(
     }
     // Same code path as the public fetch endpoint, so the page shows exactly
     // what a federation participant would receive.
-    const response = await trustAnchor.handleRequest(
+    const response = await registry.trustAnchor.handleRequest(
       new Request(new URL(fetchPath(sub), config.entityId), { method: "GET" }),
     );
     if (response.status !== 200) {

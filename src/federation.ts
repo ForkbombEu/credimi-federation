@@ -51,8 +51,8 @@ export async function createTrustAnchor(options: TrustAnchorOptions): Promise<Tr
   const trustAnchor = new TrustAnchor({
     entityId: options.entityId,
     keyProvider,
-    // An in-process index rebuilt from the registry file on every start and
-    // never written at runtime; the file is the only source of membership.
+    // An in-process index filled once from the validated registry and never
+    // written afterwards; an admin change builds a new TrustAnchor instead.
     storage: new MemoryStorageAdapter(),
     metadata: {
       federation_entity: {

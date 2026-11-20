@@ -98,13 +98,38 @@ const RegistryFileSchema = z.strictObject({
   subordinates: z.array(z.unknown()),
 });
 
+/** One registry entry exactly as it is stored in the file. */
+export interface RegistryEntry {
+  readonly entity_id: string;
+  readonly enabled: boolean;
+  readonly entity_types: readonly string[];
+  readonly jwks: { readonly keys: readonly unknown[] };
+  readonly metadata_policy?: Readonly<Record<string, unknown>>;
+  readonly constraints?: Readonly<Record<string, unknown>>;
+}
+
+export interface LoadOptions {
+  /**
+   * Treat a missing file as an empty registry. Used only when the admin area
+   * is enabled, which creates the file on its first save.
+   */
+  readonly missingIsEmpty?: boolean;
+}
+
 /** Reads and validates the registry file. Throws SubordinateConfigError. */
-export async function loadSubordinates(path: string, owner: RegistryOwner): Promise<Subordinate[]> {
+export async function loadSubordinates(
+  path: string,
+  owner: RegistryOwner,
+  options: LoadOptions = {},
+): Promise<Subordinate[]> {
   let text: string;
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      if (options.missingIsEmpty === true) {
+        return [];
+      }
       throw new SubordinateConfigError(path, [
         'file not found. Create it; an empty registry is {"subordinates": []} ' +
           "(see config/subordinates.example.json).",
@@ -121,7 +146,26 @@ export async function loadSubordinates(path: string, owner: RegistryOwner): Prom
   return parseSubordinates(raw, owner, path);
 }
 
-/** Validates an already-parsed registry document. Exposed for tests. */
+/** The file form of a validated subordinate; the inverse of parsing. */
+export function toRegistryEntry(subordinate: Subordinate): RegistryEntry {
+  return {
+    entity_id: subordinate.entityId,
+    enabled: subordinate.enabled,
+    entity_types: [...subordinate.entityTypes],
+    jwks: { keys: subordinate.jwks.keys.map((key) => ({ ...key })) },
+    ...(subordinate.metadataPolicy === undefined
+      ? {}
+      : { metadata_policy: subordinate.metadataPolicy }),
+    ...(subordinate.constraints === undefined ? {} : { constraints: subordinate.constraints }),
+  };
+}
+
+/** The registry file content for validated subordinates, in registry order. */
+export function serializeSubordinates(subordinates: readonly Subordinate[]): string {
+  return `${JSON.stringify({ subordinates: subordinates.map(toRegistryEntry) }, null, 2)}\n`;
+}
+
+/** Validates an already-parsed registry document, as startup and every admin change do. */
 export async function parseSubordinates(
   raw: unknown,
   owner: RegistryOwner,

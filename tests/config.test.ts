@@ -61,6 +61,21 @@ describe("loadConfig", () => {
   it.each(["0", "65536", "80a", "-1"])("rejects PORT=%s", (port) => {
     expect(() => loadConfig({ ...baseEnv, PORT: port })).toThrow(ConfigError);
   });
+
+  it("enables the admin area with a password used exactly as given", () => {
+    const password = " correct horse battery staple ";
+    expect(loadConfig(baseEnv).adminPassword).toBeUndefined();
+    expect(loadConfig({ ...baseEnv, FEDERATION_ADMIN_PASSWORD: "" }).adminPassword).toBeUndefined();
+    expect(loadConfig({ ...baseEnv, FEDERATION_ADMIN_PASSWORD: password }).adminPassword).toBe(
+      password,
+    );
+  });
+
+  it("refuses an admin password shorter than 16 characters", () => {
+    expect(() => loadConfig({ ...baseEnv, FEDERATION_ADMIN_PASSWORD: "fifteen-chars-x" })).toThrow(
+      /FEDERATION_ADMIN_PASSWORD must be at least 16 characters/,
+    );
+  });
 });
 
 describe("parseEntityId", () => {

@@ -11,10 +11,11 @@ import { loadSubordinates, SubordinateConfigError } from "./subordinates.js";
 async function main(): Promise<void> {
   const config = loadConfig();
   const key = await loadFederationKey(config.signingKey);
-  const subordinates = await loadSubordinates(config.subordinatesPath, {
-    entityId: config.entityId,
-    key,
-  });
+  const subordinates = await loadSubordinates(
+    config.subordinatesPath,
+    { entityId: config.entityId, key },
+    { missingIsEmpty: config.adminPassword !== undefined },
+  );
   const app = await buildApp({ config, key, subordinates }, { logger: true });
 
   const shutdown = (signal: string): void => {

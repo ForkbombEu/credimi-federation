@@ -19,6 +19,8 @@ export interface AppConfig {
   readonly signingKey: SigningKeySource;
   readonly subordinatesPath: string;
   readonly federationName: string;
+  /** Shared admin password; the admin area exists only when this is set. */
+  readonly adminPassword?: string;
 }
 
 export class ConfigError extends Error {
@@ -29,15 +31,37 @@ const DEFAULT_PORT = 3000;
 const DEFAULT_FEDERATION_NAME = "OpenID Federation Trust Anchor";
 const KEY_PATH_VARIABLE = "FEDERATION_SIGNING_KEY_PATH";
 const KEY_VARIABLE = "FEDERATION_SIGNING_KEY";
+const ADMIN_PASSWORD_VARIABLE = "FEDERATION_ADMIN_PASSWORD";
+export const MIN_ADMIN_PASSWORD_LENGTH = 16;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const adminPassword = parseAdminPassword(env[ADMIN_PASSWORD_VARIABLE]);
   return {
     entityId: parseEntityId(requireEnv(env, "FEDERATION_ENTITY_ID")),
     port: parsePort(env["PORT"]),
     signingKey: signingKeySource(env),
     subordinatesPath: requireEnv(env, "FEDERATION_SUBORDINATES_PATH"),
     federationName: optionalEnv(env, "FEDERATION_NAME") ?? DEFAULT_FEDERATION_NAME,
+    ...(adminPassword === undefined ? {} : { adminPassword }),
   };
+}
+
+/**
+ * The password is used exactly as given (no trimming), so what the operator
+ * stored is what they type. A short password is refused rather than accepted
+ * with a warning: the admin area can pin keys for any Entity Identifier.
+ */
+function parseAdminPassword(value: string | undefined): string | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  if (value.length < MIN_ADMIN_PASSWORD_LENGTH) {
+    throw new ConfigError(
+      `${ADMIN_PASSWORD_VARIABLE} must be at least ${MIN_ADMIN_PASSWORD_LENGTH} characters; ` +
+        "generate one with `openssl rand -base64 24`.",
+    );
+  }
+  return value;
 }
 
 /**

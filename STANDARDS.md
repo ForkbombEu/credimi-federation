@@ -41,6 +41,10 @@ Entities and multi-level hierarchies, `signed_jwks_uri`/`jwks_uri`
 publication of federation keys. These endpoints are not advertised and return
 `404 not_found`.
 
+The optional admin area (see `SPECS.md`) is operator tooling for editing the
+subordinate registry. It is not Automatic or Explicit Registration: entities
+cannot register themselves, and keys are pinned only by the operator.
+
 List-filter notes (behaviour of `@oidfed/authority` 2.0.0, verified by tests):
 
 - When `entity_type` is repeated, the result contains subordinates having

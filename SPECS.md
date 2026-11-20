@@ -91,9 +91,11 @@ source <https://github.com/Dahkenangnon/oidfed>).
   answers other methods itself with a §8.9-shaped `405`.
 
 Decision: adopt both packages. The `MemoryStorageAdapter` is used as an
-in-process, read-only index that is rebuilt from the declarative subordinate
-file on every start; it is never written at runtime, so its "development-only"
-label (which refers to persistence) does not apply.
+in-process index built from the declarative subordinate file. The service
+never writes to it after construction: on start, and after every change made
+in the admin area, a new `TrustAnchor` with a fresh adapter is built from the
+validated registry and replaces the previous one. Its "development-only"
+label (which refers to persistence) therefore does not apply.
 
 ## Application architecture
 
@@ -108,6 +110,8 @@ credimi-federation (one Node.js process)
     ├── /openapi.yaml, /openapi.json       OpenAPI 3.1 (YAML is authoritative)
     ├── /docs                              Stoplight Elements
     ├── /, /inspect                        read-only server-rendered UI
+    ├── /admin/*                           authenticated admin area (only when
+    │                                      FEDERATION_ADMIN_PASSWORD is set)
     └── /assets/*, /favicon.svg            brand and application assets
 ```
 
@@ -131,10 +135,35 @@ credimi-federation (one Node.js process)
   is validated at startup; any error aborts startup. Enabled entries are
   registered with the `TrustAnchor`; disabled ones are shown in the UI but are
   not served by fetch or list.
+- **Administration (demo and testing).** When `FEDERATION_ADMIN_PASSWORD` is
+  set, `/admin` lets one operator add, edit, enable, disable and delete
+  subordinates. Every change goes through the same validation as startup; it
+  is written to the registry file atomically (temporary file in the same
+  directory, `fsync`, `rename`), one change at a time, and only then does a
+  new `TrustAnchor` replace the running one. No restart is needed. A change
+  that fails validation or cannot be written leaves the file and the served
+  statements untouched. With the admin area enabled, a missing registry file
+  means an empty registry; the file is created on the first save. Every change
+  is logged with the action and the Entity Identifier.
+- **Admin authentication.** One shared password from the
+  `FEDERATION_ADMIN_PASSWORD` secret (at least 16 characters), compared in
+  constant time. A successful login creates a random session held in memory
+  for 8 hours and sent as a `__Host-` cookie (`Secure`, `HttpOnly`,
+  `SameSite=Strict`); sessions end on logout or restart. Every state-changing
+  request carries a per-session CSRF token. After 10 failed logins in one
+  minute, further attempts are refused until the minute ends. The admin area
+  is not linked from the public pages.
+- **Key pinning stays out of band.** The admin area never copies keys from a
+  subordinate's Entity Configuration. The operator pastes the public JWKS
+  received over a trusted channel; a separate "Check live keys" page fetches
+  the subordinate's Entity Configuration and reports whether it is signed by a
+  pinned key, which pinned and published keys differ, and whether its
+  `authority_hints` name this Trust Anchor.
 - **No impersonation.** The service never holds subordinate private keys and
   never publishes Entity Configurations for other entities. It only signs
   Subordinate Statements about pinned public keys.
 - **No database.** All state is the key file plus the subordinate file.
+  Admin sessions are in memory only.
 
 ## CLI, web, and API interfaces
 
@@ -148,7 +177,7 @@ CLI (`credimi-federation`, also `node dist/cli.js`):
 
 `check` and `jwks` accept either key source.
 
-HTTP (all `GET`, no authentication, no write operations):
+Public HTTP (all `GET`, no authentication, no write operations):
 
 | Path                             | Response                                         |
 | -------------------------------- | ------------------------------------------------ |
@@ -160,6 +189,23 @@ HTTP (all `GET`, no authentication, no write operations):
 | `/docs`                          | HTML, Stoplight Elements                         |
 | `/`                              | HTML homepage                                    |
 | `/inspect`, `/inspect?sub=…`     | HTML decoded view of a signed statement          |
+
+Admin HTTP (registered only when `FEDERATION_ADMIN_PASSWORD` is set; HTML
+forms posting `application/x-www-form-urlencoded`; everything except the
+login page requires a session, and every `POST` except login requires the
+CSRF token). These pages are not part of the OpenAPI description, which
+covers the public API only.
+
+| Method and path                     | Behaviour                                              |
+| ----------------------------------- | ------------------------------------------------------ |
+| `GET`, `POST` `/admin/login`        | Login form; checks the password, starts a session      |
+| `POST` `/admin/logout`              | Ends the session                                       |
+| `GET` `/admin`                      | Registry overview with actions                         |
+| `GET`, `POST` `/admin/new`          | Add a subordinate                                      |
+| `GET`, `POST` `/admin/edit?sub=…`   | Edit a subordinate                                     |
+| `POST` `/admin/status`              | Enable or disable a subordinate                        |
+| `GET`, `POST` `/admin/delete?sub=…` | Confirm and delete a subordinate                       |
+| `GET` `/admin/check?sub=…`          | Compare pinned keys with the live Entity Configuration |
 
 ## Configuration
 
@@ -173,6 +219,7 @@ Environment variables (validated at startup; invalid values abort):
 | `FEDERATION_SUBORDINATES_PATH` | yes      | —                                | Subordinate registry JSON file                             |
 | `PORT`                         | no       | `3000`                           | TCP port; the service binds `0.0.0.0`                      |
 | `FEDERATION_NAME`              | no       | `OpenID Federation Trust Anchor` | Display name on the website                                |
+| `FEDERATION_ADMIN_PASSWORD`    | no       | — (admin area off)               | Secret, ≥ 16 characters; enables `/admin`                  |
 
 The Docker image sets `FEDERATION_SUBORDINATES_PATH=/data/subordinates.json`.
 It sets no key variable, because setting both key sources is refused.
@@ -209,8 +256,14 @@ All commands run through Task; `mise install` provides Node.js, pnpm and Task.
   `docker run --rm -e FEDERATION_SIGNING_KEY_PATH=/data/keys/federation.jwk
 -v <volume>:/data <image> node dist/cli.js init`, or generate the key
   elsewhere and pass it as the `FEDERATION_SIGNING_KEY` secret (the Coolify
-  setup in the README, which needs no volume). Starting without a key or
-  subordinate file fails with a clear error.
+  setup in the README, which needs no volume). Starting without a key fails
+  with a clear error; so does starting without a subordinate file, unless the
+  admin area is enabled.
+- With the admin area enabled, the registry must live in a writable directory
+  on a persistent volume (for example `/data/subordinates.json`). A
+  single-file bind mount such as a Coolify File Mount cannot be replaced by
+  `rename` and is rewritten by Coolify on deploy, so it is not supported for
+  an admin-managed registry; a save to it fails with an error naming the fix.
 - `HEALTHCHECK` calls `GET /healthz` on `$PORT`.
 - Behind Coolify (or any TLS-terminating proxy) only the proxy's public
   hostname must match `FEDERATION_ENTITY_ID`; the internal hostname and port
@@ -245,7 +298,13 @@ logo SHA-256 pins from `DESIGN.md` §1 and byte equality of every copied file.
 - Never commit private keys, `.env`, or `/data`. `*.jwk` is ignored.
 - Never generate or replace the federation key during normal startup.
 - Never derive URLs from request headers.
-- Never add an unauthenticated write or registration endpoint.
+- Never add an unauthenticated write or registration endpoint. The admin area
+  is the only write path; it is off unless `FEDERATION_ADMIN_PASSWORD` is set.
+- The admin area is a demo and testing convenience. A production deployment
+  should manage the registry in Git, validate it with `task check` in CI and
+  deploy on merge, leaving the admin area off.
+- Never pin a subordinate key taken from its Entity Configuration; keys are
+  pasted by the operator after an out-of-band exchange.
 - Never hold or publish subordinate private keys.
 - Protocol logic must not hardcode `federation.credimi.io` or any Credimi
   entity identifier; those appear only in examples and documentation.

@@ -140,6 +140,40 @@ describe("credimi-federation validate", () => {
     expect(stdout).toContain("- FAIL Entity Configuration is reachable");
   });
 
+  it("retries a transient failure once before reporting the member", async () => {
+    const key = await subordinateKey();
+    const { registryDir, descriptor } = await setup({ [registryFileName(ISSUER)]: member(key) });
+    const jwt = await signEntityConfiguration(key, ISSUER, [key.publicJwk]);
+    let calls = 0;
+    const flaky: Fetch = () => {
+      calls += 1;
+      return calls === 1
+        ? Promise.resolve(new Response("busy", { status: 503 }))
+        : Promise.resolve(new Response(jwt, { status: 200 }));
+    };
+    const file = join(registryDir, registryFileName(ISSUER));
+    const { code, stdout } = await validate([registryDir, descriptor, "--live", file], flaky);
+    expect(calls).toBe(2);
+    expect(stdout).toContain("All live checks passed.");
+    expect(code).toBe(0);
+  });
+
+  it("does not retry a definitive answer such as 404", async () => {
+    const { registryDir, descriptor } = await setup({
+      [registryFileName(ISSUER)]: member(await subordinateKey()),
+    });
+    let calls = 0;
+    const missing: Fetch = () => {
+      calls += 1;
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    };
+    const file = join(registryDir, registryFileName(ISSUER));
+    const { code, stdout } = await validate([registryDir, descriptor, "--live", file], missing);
+    expect(calls).toBe(1);
+    expect(stdout).toContain("The server answered HTTP 404.");
+    expect(code).toBe(1);
+  });
+
   it("skips disabled members, which are not served", async () => {
     const { registryDir, descriptor } = await setup({
       [registryFileName(ISSUER)]: member(await subordinateKey(), false),

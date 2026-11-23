@@ -89,7 +89,7 @@ export async function validateRegistry(
   }
   write("\n## Live key checks\n\n");
   if (options.liveFiles.length === 0) {
-    write("No added or modified member files.\n");
+    write("No member files to live-check.\n");
     return 0;
   }
   let failed = false;
@@ -110,7 +110,8 @@ export async function validateRegistry(
       write("Skipped: the entry is disabled, so it is not served.\n\n");
       continue;
     }
-    const report = await checkLiveKeys(subordinate, owner.entityId, options.fetch);
+    // Unattended (CI): retry a transient failure once before reporting it.
+    const report = await checkLiveKeys(subordinate, owner.entityId, options.fetch, 2);
     for (const check of report.checks) {
       write(`- ${check.ok ? "PASS" : "FAIL"} ${check.label}: ${check.detail}\n`);
     }

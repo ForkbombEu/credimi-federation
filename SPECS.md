@@ -163,7 +163,18 @@ credimi-federation (one Node.js process)
   pull request adds or modifies whose entry is enabled; every check must pass.
   Disabled entries are not live-checked because they are not served, so no
   entry becomes served through a pull request without passing every check.
-  `task ci` runs the offline validation on every push and pull request.
+  `task ci` runs the offline validation on every push and pull request. In
+  every workflow the live check retries a request that failed or got a 5xx
+  answer once, so one network hiccup does not fail a member.
+- **Weekly health check.** `.github/workflows/registry-health.yml` runs every
+  Monday at 06:17 UTC and on demand. It live-checks every enabled member of
+  the GitHub registry on the default branch. On failure it opens one issue
+  labelled `registry-health`, or updates the open one and comments on it,
+  with the report; when every check passes again it closes that issue. It
+  is the only workflow with a write permission (`issues: write`). It never
+  disables or removes a member: that is a trust decision made by pull
+  request. GitHub suspends scheduled workflows in public repositories after
+  60 days without activity; re-enable it in the Actions tab.
 - **Administration (demo and testing).** When `FEDERATION_ADMIN_PASSWORD` is
   set, `/admin` lets one operator add, edit, enable, disable and delete
   entries of the local registry. Every change goes through the same
@@ -288,10 +299,11 @@ All commands run through Task; `mise install` provides Node.js, pnpm and Task.
 GitHub Actions workflows, using the latest major version of every action
 (`actions/checkout@v7`, `jdx/mise-action@v5`, checked on 23 November 2026):
 
-| Workflow       | Trigger                            | Runs                                                                   |
-| -------------- | ---------------------------------- | ---------------------------------------------------------------------- |
-| `ci.yml`       | push to `main`, every pull request | `task ci`; Docker image build                                          |
-| `registry.yml` | pull requests touching `registry/` | base-branch `validate` plus `--live` on added/modified enabled members |
+| Workflow              | Trigger                            | Runs                                                                   |
+| --------------------- | ---------------------------------- | ---------------------------------------------------------------------- |
+| `ci.yml`              | push to `main`, every pull request | `task ci`; Docker image build                                          |
+| `registry.yml`        | pull requests touching `registry/` | base-branch `validate` plus `--live` on added/modified enabled members |
+| `registry-health.yml` | Mondays 06:17 UTC, manual          | `--live` on every member; opens/updates/closes the health issue        |
 
 ## Production and Docker execution
 

@@ -242,6 +242,10 @@ of two places, and each entry pins its **public** federation keys:
   the pull request adds or changes. Every check must pass. Merging is the
   trust decision: the checks prove that whoever controls the host publishes
   those keys, not who they are. The merged file ships in the next image.
+  Every Monday the **Registry health** workflow live-checks every member
+  again; failures open (or update) one issue labelled `registry-health`,
+  which closes itself once everything passes. Failing members stay served
+  until a pull request disables or removes them.
 - **Local registry** (`FEDERATION_SUBORDINATES_PATH`): the operator adds an
   entry with keys obtained over a trusted channel, by editing the file and
   restarting or in the admin area (see [Quick GUI guide](#admin-area)). See

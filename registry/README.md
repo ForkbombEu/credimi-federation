@@ -60,4 +60,9 @@ pull request. After the merge and redeploy, switch to signing with the new
 key, remove the old key from your Entity Configuration, and remove it from
 your file in a second pull request. Both pull requests must pass the checks.
 
+Every Monday the **Registry health** workflow repeats the live checks for
+every enabled member. If yours fails, it is listed in an issue labelled
+`registry-health`; fix your Entity Configuration, or update your file by
+pull request. Maintainers may disable or remove entries that keep failing.
+
 To leave the federation, open a pull request that deletes your file.

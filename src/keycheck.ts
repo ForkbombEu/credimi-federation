@@ -39,17 +39,29 @@ export function entityConfigurationUrl(entityId: string): string {
   return `${entityId.replace(/\/$/, "")}/.well-known/openid-federation`;
 }
 
+/**
+ * `attempts` above 1 retries a request that failed or got a 5xx answer, each
+ * attempt with its own timeout; unattended checks use it so a single network
+ * hiccup does not report a member as broken.
+ */
 export async function checkLiveKeys(
   subordinate: Subordinate,
   trustAnchorId: string,
   fetchFn: Fetch,
-  now: () => number = Date.now,
+  attempts = 1,
 ): Promise<KeyCheckReport> {
   const url = entityConfigurationUrl(subordinate.entityId);
   const checks: KeyCheck[] = [];
   const reachable = "Entity Configuration is reachable";
 
-  const fetched = await fetchStatement(url, fetchFn);
+  let fetched = await fetchStatement(url, fetchFn);
+  for (
+    let attempt = 1;
+    attempt < attempts && typeof fetched !== "string" && fetched.transient;
+    attempt += 1
+  ) {
+    fetched = await fetchStatement(url, fetchFn);
+  }
   if (typeof fetched !== "string") {
     checks.push({ label: reachable, ok: false, detail: fetched.error });
     return { url, checks };
@@ -69,11 +81,15 @@ export async function checkLiveKeys(
   checks.push(await signatureCheck(subordinate, fetched, header));
   checks.push(await publishedKeysCheck(subordinate, payload));
   checks.push(authorityHintsCheck(trustAnchorId, payload));
-  checks.push(expiryCheck(payload, now()));
+  checks.push(expiryCheck(payload, Date.now()));
   return { url, checks };
 }
 
-async function fetchStatement(url: string, fetchFn: Fetch): Promise<string | { error: string }> {
+/** The compact JWT, or why it could not be fetched; `transient` failures are worth retrying. */
+async function fetchStatement(
+  url: string,
+  fetchFn: Fetch,
+): Promise<string | { error: string; transient: boolean }> {
   let response: Response;
   try {
     response = await fetchFn(url, {
@@ -83,17 +99,26 @@ async function fetchStatement(url: string, fetchFn: Fetch): Promise<string | { e
     });
   } catch (error) {
     if (error instanceof Error && error.name === "TimeoutError") {
-      return { error: `No response within ${FETCH_TIMEOUT_MS / 1000} seconds.` };
+      return { error: `No response within ${FETCH_TIMEOUT_MS / 1000} seconds.`, transient: true };
     }
     const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
-    return { error: `The request failed: ${cause instanceof Error ? cause.message : "unknown"}.` };
+    return {
+      error: `The request failed: ${cause instanceof Error ? cause.message : "unknown"}.`,
+      transient: true,
+    };
   }
   if (response.status !== 200) {
-    return { error: `The server answered HTTP ${response.status}.` };
+    return {
+      error: `The server answered HTTP ${response.status}.`,
+      transient: response.status >= 500,
+    };
   }
   const body = await response.text();
   if (body.length > MAX_ENTITY_CONFIGURATION_BYTES) {
-    return { error: `The response is larger than ${MAX_ENTITY_CONFIGURATION_BYTES} bytes.` };
+    return {
+      error: `The response is larger than ${MAX_ENTITY_CONFIGURATION_BYTES} bytes.`,
+      transient: false,
+    };
   }
   return body.trim();
 }

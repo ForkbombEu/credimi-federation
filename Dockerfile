@@ -29,15 +29,19 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 FROM ${NODE_IMAGE} AS runtime
+# FEDERATION_REGISTRY_DIR points at the GitHub registry baked into the image;
+# set it to an empty value to serve only the local registry.
 ENV NODE_ENV=production \
     PORT=3000 \
-    FEDERATION_SUBORDINATES_PATH=/data/subordinates.json
+    FEDERATION_SUBORDINATES_PATH=/data/subordinates.json \
+    FEDERATION_REGISTRY_DIR=/app/registry
 WORKDIR /app
 COPY --from=production-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 COPY public ./public
 COPY openapi ./openapi
+COPY registry ./registry
 # The non-root `node` user (uid 1000) owns the data volume; keys live in a
 # directory only it can enter. A fresh named volume inherits this ownership.
 RUN mkdir -p /data/keys \

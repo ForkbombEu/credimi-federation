@@ -47,9 +47,9 @@ async function federation() {
         },
       ],
     },
-    { entityId: config.entityId, key },
+    { entityId: config.entityId, publicKeys: [key.publicJwk] },
   );
-  const app = await buildApp({ config, key, subordinates });
+  const app = await buildApp({ config, key, registries: { local: subordinates, github: [] } });
   const taJwks = createLocalJWKSet({ keys: [{ ...key.publicJwk }] });
   return { app, key, taJwks, issuerKey, verifierKey };
 }

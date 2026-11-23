@@ -1,14 +1,14 @@
 import { readFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
-import { SignJWT, type JWK } from "jose";
+import type { JWK } from "jose";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Fetch } from "../src/keycheck.js";
 import { LOGIN_FAILURE_LIMIT, SESSION_COOKIE } from "../src/sessions.js";
+import type { Subordinate } from "../src/subordinates.js";
 import {
   createFixture,
-  ENTITY_ID,
-  nowSeconds,
+  signEntityConfiguration,
   subordinateKey,
   type SubordinateKey,
 } from "./helpers.js";
@@ -19,11 +19,11 @@ const FORM = "application/x-www-form-urlencoded";
 
 const unreachable: Fetch = () => Promise.reject(new Error("no network in tests"));
 
-async function adminSite(fetch: Fetch = unreachable) {
+async function adminSite(fetch: Fetch = unreachable, github: readonly Subordinate[] = []) {
   const fixture = await createFixture({ adminPassword: PASSWORD });
   // No registry file exists yet: the admin area starts from an empty registry.
   const app = await buildApp(
-    { config: fixture.config, key: fixture.key, subordinates: [] },
+    { config: fixture.config, key: fixture.key, registries: { local: [], github } },
     { fetch },
   );
   return { app, path: fixture.config.subordinatesPath };
@@ -89,7 +89,7 @@ async function fetchStatus(app: FastifyInstance, sub: string): Promise<number> {
 describe("admin area availability", () => {
   it("does not exist without FEDERATION_ADMIN_PASSWORD", async () => {
     const { config, key } = await createFixture();
-    const app = await buildApp({ config, key, subordinates: [] });
+    const app = await buildApp({ config, key, registries: { local: [], github: [] } });
     for (const url of ["/admin", "/admin/login"]) {
       const response = await get(app, url);
       expect(response.statusCode).toBe(404);
@@ -281,25 +281,57 @@ describe("admin registry changes", () => {
   });
 });
 
-describe("check live keys", () => {
-  async function entityConfiguration(signer: SubordinateKey, published: JWK[]): Promise<string> {
-    return new SignJWT({
-      jwks: { keys: published },
-      authority_hints: [ENTITY_ID],
-      metadata: { federation_entity: {} },
-    })
-      .setProtectedHeader({
-        alg: "ES256",
-        typ: "entity-statement+jwt",
-        kid: signer.publicJwk.kid ?? "",
-      })
-      .setIssuer(ISSUER)
-      .setSubject(ISSUER)
-      .setIssuedAt(nowSeconds())
-      .setExpirationTime(nowSeconds() + 3600)
-      .sign(signer.privateKey);
+describe("GitHub registry in the admin area", () => {
+  const GITHUB_MEMBER = "https://github-member.test.example";
+
+  async function githubMember(): Promise<Subordinate> {
+    return {
+      entityId: GITHUB_MEMBER,
+      enabled: true,
+      entityTypes: ["openid_credential_verifier"],
+      jwks: { keys: [(await subordinateKey()).publicJwk] },
+    };
   }
 
+  it("shows GitHub members read-only, with a link to their file, and serves them", async () => {
+    const { app } = await adminSite(unreachable, [await githubMember()]);
+    const session = await signIn(app);
+    const sub = encodeURIComponent(GITHUB_MEMBER);
+    const body = (await get(app, "/admin", session)).body;
+    expect(body).toContain(
+      'href="https://github.com/ForkbombEu/credimi-federation/blob/main/registry/github-member.test.example.json"',
+    );
+    expect(body).toContain(`/admin/check?sub=${sub}`);
+    expect(body).not.toContain(`/admin/edit?sub=${sub}`);
+    expect(body).not.toContain(`/admin/delete?sub=${sub}`);
+
+    expect((await get(app, `/admin/edit?sub=${sub}`, session)).statusCode).toBe(404);
+    const status = await post(
+      app,
+      "/admin/status",
+      { sub: GITHUB_MEMBER, enabled: "false" },
+      session,
+    );
+    expect(status.statusCode).toBe(404);
+    expect(await fetchStatus(app, GITHUB_MEMBER)).toBe(200);
+  });
+
+  it("refuses a local entry for an Entity Identifier the GitHub registry holds", async () => {
+    const { app, path } = await adminSite(unreachable, [await githubMember()]);
+    const session = await signIn(app);
+    const response = await post(
+      app,
+      "/admin/new",
+      entryFields(await subordinateKey(), { entity_id: `${GITHUB_MEMBER}/` }),
+      session,
+    );
+    expect(response.statusCode).toBe(422);
+    expect(response.body).toContain("is managed in the GitHub registry");
+    await expect(readFile(path)).rejects.toThrow();
+  });
+});
+
+describe("check live keys", () => {
   async function check(jwt: string, pinned: SubordinateKey) {
     const requested: string[] = [];
     const fetch: Fetch = (url) => {
@@ -319,7 +351,7 @@ describe("check live keys", () => {
 
   it("passes when the live Entity Configuration is signed with the pinned key", async () => {
     const key = await subordinateKey();
-    const body = await check(await entityConfiguration(key, [key.publicJwk]), key);
+    const body = await check(await signEntityConfiguration(key, ISSUER, [key.publicJwk]), key);
     expect(body).toContain("All checks passed.");
     expect(body).not.toContain("status-fail");
   });
@@ -327,7 +359,10 @@ describe("check live keys", () => {
   it("flags an Entity Configuration signed with a key that was not pinned", async () => {
     const pinned = await subordinateKey();
     const rotated = await subordinateKey();
-    const body = await check(await entityConfiguration(rotated, [rotated.publicJwk]), pinned);
+    const body = await check(
+      await signEntityConfiguration(rotated, ISSUER, [rotated.publicJwk]),
+      pinned,
+    );
     expect(body).toContain(`Signed with kid ${rotated.publicJwk.kid ?? ""}, which is not pinned`);
     expect(body).toContain(`published ${rotated.publicJwk.kid ?? ""} is not pinned`);
     expect(body).toContain("status-fail");

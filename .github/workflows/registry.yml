@@ -1,0 +1,46 @@
+name: Registry
+
+# Checks pull requests that add, change or remove members of the GitHub
+# registry. The validator and the Trust Anchor descriptor come from the base
+# branch, so a pull request cannot weaken the checks it is judged by; only
+# the registry files come from the pull request. No secrets are available and
+# the token is read-only.
+
+on:
+  pull_request:
+    paths:
+      - "registry/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate and live-check members
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the base branch (trusted validator)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.base_ref }}
+          persist-credentials: false
+      - name: Check out the pull request (registry files)
+        uses: actions/checkout@v7
+        with:
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@v5
+      - run: task install
+      - run: task build
+      - name: Validate the registry; live-check added or modified members
+        shell: bash
+        run: |
+          mapfile -t changed < <(git -C pr diff --name-only --diff-filter=AM \
+            "origin/${GITHUB_BASE_REF}...HEAD" -- 'registry/*.json')
+          status=0
+          node dist/cli.js validate pr/registry config/trust-anchor.json \
+            --live "${changed[@]/#/pr/}" > report.md || status=$?
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          cat report.md
+          exit "$status"

@@ -4,9 +4,10 @@
  * page script, so destructive actions get their own confirmation page.
  */
 import type { KeyCheckReport } from "../keycheck.js";
-import type { Subordinate } from "../subordinates.js";
+import type { RegistryMember } from "../registry.js";
+import { registryFileName, type Subordinate } from "../subordinates.js";
 import { html, type SafeHtml } from "./html.js";
-import { layout, type SiteInfo } from "./pages.js";
+import { layout, REPOSITORY_URL, type SiteInfo } from "./pages.js";
 
 /** What the add/edit form shows; the raw text the operator typed or the stored entry. */
 export interface EntryFormValues {
@@ -69,27 +70,31 @@ export function loginPage(site: SiteInfo, error?: string): string {
 }
 
 export interface DashboardModel {
-  readonly subordinates: readonly Subordinate[];
+  readonly members: readonly RegistryMember[];
   readonly csrfToken: string;
   readonly notice?: { readonly kind: Notice; readonly subject: string };
 }
 
 export function dashboardPage(site: SiteInfo, model: DashboardModel): string {
-  const enabled = model.subordinates.filter((entry) => entry.enabled).length;
+  const served = model.members.filter((member) => !member.overridden);
+  const enabled = served.filter((member) => member.subordinate.enabled).length;
+  const fromGitHub = served.filter((member) => member.source === "github").length;
   const body = html`
     <div class="container page-content">
       <p class="eyebrow">Administration</p>
       <h1 class="page-title">Subordinate registry</h1>
       <p class="section-note">
-        ${enabled} enabled of ${model.subordinates.length} registered. Every change is validated,
-        saved to the registry file and served immediately; no restart is needed.
+        ${enabled} enabled of ${served.length} registered, ${fromGitHub} from the GitHub registry.
+        Changes to local entries are validated, saved and served immediately; no restart is needed.
+        GitHub entries change only through pull requests and win over a local entry with the same
+        Entity Identifier.
       </p>
       ${model.notice === undefined ? "" : noticeAlert(model.notice.kind, model.notice.subject)}
       <div class="hero-actions">
         <a class="btn btn-primary btn-md" href="/admin/new">Add subordinate</a>
       </div>
       ${
-        model.subordinates.length === 0
+        model.members.length === 0
           ? html`<div class="card empty-state">
               <p><strong>No subordinate entities are registered yet.</strong></p>
               <p>Add one with its Entity Identifier and the public keys its operator sent you.</p>
@@ -99,6 +104,7 @@ export function dashboardPage(site: SiteInfo, model: DashboardModel): string {
                 <thead>
                   <tr>
                     <th scope="col">Entity Identifier</th>
+                    <th scope="col">Source</th>
                     <th scope="col">Entity types</th>
                     <th scope="col">Status</th>
                     <th scope="col">Key IDs</th>
@@ -106,9 +112,7 @@ export function dashboardPage(site: SiteInfo, model: DashboardModel): string {
                   </tr>
                 </thead>
                 <tbody>
-                  ${model.subordinates.map((subordinate) =>
-                    dashboardRow(subordinate, model.csrfToken),
-                  )}
+                  ${model.members.map((member) => dashboardRow(member, model.csrfToken))}
                 </tbody>
               </table>
             </div>`
@@ -118,9 +122,18 @@ export function dashboardPage(site: SiteInfo, model: DashboardModel): string {
   return adminLayout(site, "Subordinate registry", model.csrfToken, body);
 }
 
-function dashboardRow(subordinate: Subordinate, csrfToken: string): SafeHtml {
+function dashboardRow(member: RegistryMember, csrfToken: string): SafeHtml {
+  const { subordinate } = member;
+  const fileUrl = `${REPOSITORY_URL}/blob/main/registry/${registryFileName(subordinate.entityId)}`;
   return html`<tr>
     <td data-label="Entity Identifier"><code class="entity-ref">${subordinate.entityId}</code></td>
+    <td data-label="Source">
+      ${
+        member.source === "github"
+          ? html`<a href="${fileUrl}" target="_blank" rel="noopener">GitHub</a>`
+          : "Local"
+      }
+    </td>
     <td data-label="Entity types">
       ${
         subordinate.entityTypes.length === 0
@@ -136,23 +149,37 @@ function dashboardRow(subordinate: Subordinate, csrfToken: string): SafeHtml {
           ? html`<span class="status-chip status-verifier">Enabled</span>`
           : html`<span class="badge badge-neutral">Disabled</span>`
       }
+      ${
+        member.overridden
+          ? html`<span class="badge badge-neutral">Overridden by GitHub, not served</span>`
+          : ""
+      }
     </td>
     <td data-label="Key IDs">
       ${subordinate.jwks.keys.map((key) => html`<code class="kid">${key.kid}</code> `)}
     </td>
     <td data-label="Actions">
       <div class="row-actions">
-        <a href="${adminUrl("edit", subordinate.entityId)}">Edit</a>
-        <a href="${adminUrl("check", subordinate.entityId)}">Check live keys</a>
-        <form method="post" action="/admin/status">
-          ${csrfField(csrfToken)}
-          <input type="hidden" name="sub" value="${subordinate.entityId}" />
-          <input type="hidden" name="enabled" value="${subordinate.enabled ? "false" : "true"}" />
-          <button class="btn btn-outline btn-sm" type="submit">
-            ${subordinate.enabled ? "Disable" : "Enable"}
-          </button>
-        </form>
-        <a href="${adminUrl("delete", subordinate.entityId)}">Delete</a>
+        ${
+          member.source === "github"
+            ? html`<a href="${adminUrl("check", subordinate.entityId)}">Check live keys</a>
+                <span class="text-muted">Change by pull request</span>`
+            : html`<a href="${adminUrl("edit", subordinate.entityId)}">Edit</a>
+                <a href="${adminUrl("check", subordinate.entityId)}">Check live keys</a>
+                <form method="post" action="/admin/status">
+                  ${csrfField(csrfToken)}
+                  <input type="hidden" name="sub" value="${subordinate.entityId}" />
+                  <input
+                    type="hidden"
+                    name="enabled"
+                    value="${subordinate.enabled ? "false" : "true"}"
+                  />
+                  <button class="btn btn-outline btn-sm" type="submit">
+                    ${subordinate.enabled ? "Disable" : "Enable"}
+                  </button>
+                </form>
+                <a href="${adminUrl("delete", subordinate.entityId)}">Delete</a>`
+        }
       </div>
     </td>
   </tr>`;

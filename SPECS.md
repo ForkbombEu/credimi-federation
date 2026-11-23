@@ -151,15 +151,18 @@ credimi-federation (one Node.js process)
   fetch or list. A missing local file means an empty local registry when the
   admin area is enabled or `FEDERATION_REGISTRY_DIR` is set.
 - **Pull request checks.** `.github/workflows/registry.yml` runs on
-  `pull_request` with a read-only token and no secrets. It runs
-  `credimi-federation validate` on the whole GitHub registry against
+  `pull_request` for changes under `registry/`, with a read-only token and no
+  secrets. It builds the validator from the **base branch** and reads
   `config/trust-anchor.json` (the Trust Anchor's Entity Identifier and public
-  JWKS, so no private key is needed in CI), using the same validation as
-  startup plus the file-name rule. It then runs the live key check (below) on
-  every member file the pull request adds or modifies whose entry is enabled;
-  every check must pass. Disabled entries are not live-checked because they
-  are not served, so no entry becomes served through a pull request without
-  passing every check. `task ci` runs the offline validation on every push.
+  JWKS, so no private key is needed in CI) from the base branch too; only the
+  registry files come from the pull request, so a pull request cannot weaken
+  the checks it is judged by. It runs `credimi-federation validate` on the
+  whole GitHub registry, using the same validation as startup plus the
+  file-name rule, then the live key check (below) on every member file the
+  pull request adds or modifies whose entry is enabled; every check must pass.
+  Disabled entries are not live-checked because they are not served, so no
+  entry becomes served through a pull request without passing every check.
+  `task ci` runs the offline validation on every push and pull request.
 - **Administration (demo and testing).** When `FEDERATION_ADMIN_PASSWORD` is
   set, `/admin` lets one operator add, edit, enable, disable and delete
   entries of the local registry. Every change goes through the same
@@ -284,10 +287,10 @@ All commands run through Task; `mise install` provides Node.js, pnpm and Task.
 GitHub Actions workflows, using the latest major version of every action
 (`actions/checkout@v7`, `jdx/mise-action@v5`, checked on 23 November 2026):
 
-| Workflow       | Trigger                                                 | Runs                                                       |
-| -------------- | ------------------------------------------------------- | ---------------------------------------------------------- |
-| `ci.yml`       | push to `main`, every pull request                      | `task ci`; Docker image build                              |
-| `registry.yml` | pull requests touching `registry/` or the TA descriptor | `validate` plus `--live` on added/modified enabled members |
+| Workflow       | Trigger                            | Runs                                                                   |
+| -------------- | ---------------------------------- | ---------------------------------------------------------------------- |
+| `ci.yml`       | push to `main`, every pull request | `task ci`; Docker image build                                          |
+| `registry.yml` | pull requests touching `registry/` | base-branch `validate` plus `--live` on added/modified enabled members |
 
 ## Production and Docker execution
 

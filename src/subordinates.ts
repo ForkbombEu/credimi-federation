@@ -1,14 +1,16 @@
 /**
- * Declarative subordinate registry.
+ * Declarative subordinate registries.
  *
- * Membership is a JSON file maintained by the federation operator. Each entry
- * pins the subordinate's public federation keys; the Trust Anchor never
- * fetches a subordinate's Entity Configuration to learn its keys, so being
- * reachable on the network grants nothing. The whole file is validated before
- * the service starts; one bad entry stops startup.
+ * Membership is declared in JSON: the local registry file maintained by the
+ * federation operator, and the GitHub registry directory with one file per
+ * subordinate. Each entry pins the subordinate's public federation keys; the
+ * Trust Anchor never fetches a subordinate's Entity Configuration to learn its
+ * keys, so being reachable on the network grants nothing. Every registry is
+ * validated before the service starts; one bad entry stops startup.
  */
 import { createPublicKey } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   FederationMetadataPolicySchema,
   PolicyOperator,
@@ -19,7 +21,6 @@ import {
 } from "@oidfed/core";
 import { calculateJwkThumbprint, type JWK } from "jose";
 import { z } from "zod";
-import type { FederationKey } from "./keys.js";
 
 export interface Subordinate {
   readonly entityId: string;
@@ -43,7 +44,8 @@ export class SubordinateConfigError extends Error {
 /** Identity of the Trust Anchor the registry is validated against. */
 export interface RegistryOwner {
   readonly entityId: string;
-  readonly key: FederationKey;
+  /** The Trust Anchor's public federation keys; no subordinate may reuse one. */
+  readonly publicKeys: readonly JWK[];
 }
 
 const PRIVATE_JWK_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] as const;
@@ -165,6 +167,85 @@ export function serializeSubordinates(subordinates: readonly Subordinate[]): str
   return `${JSON.stringify({ subordinates: subordinates.map(toRegistryEntry) }, null, 2)}\n`;
 }
 
+/**
+ * The file name a subordinate must have in the GitHub registry: the Entity
+ * Identifier without `https://` and a trailing `/`, every run of characters
+ * other than letters, digits, `.` and `-` replaced by `_`, plus `.json`. One
+ * name per identifier keeps two files from registering the same entity.
+ */
+export function registryFileName(entityId: string): string {
+  const slug = entityId
+    .replace(/^https:\/\//, "")
+    .replace(/\/$/, "")
+    .replace(/[^A-Za-z0-9.-]+/g, "_");
+  return `${slug}.json`;
+}
+
+/**
+ * Reads and validates the GitHub registry: every `*.json` file in `directory`
+ * holds one entry. Validation is the same as for the local registry, plus the
+ * file-name rule; issues name the file instead of an array index. Throws
+ * SubordinateConfigError.
+ */
+export async function loadRegistryDirectory(
+  directory: string,
+  owner: RegistryOwner,
+): Promise<Subordinate[]> {
+  let names: string[];
+  try {
+    names = (await readdir(directory)).filter((name) => name.endsWith(".json")).sort();
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      throw new SubordinateConfigError(directory, ["directory not found."]);
+    }
+    throw error;
+  }
+
+  const issues: string[] = [];
+  const entries: unknown[] = [];
+  const entryFiles: string[] = [];
+  for (const name of names) {
+    let entry: unknown;
+    try {
+      entry = JSON.parse(await readFile(join(directory, name), "utf8"));
+    } catch {
+      issues.push(`${name}: not valid JSON.`);
+      continue;
+    }
+    const entityId =
+      typeof entry === "object" && entry !== null && "entity_id" in entry
+        ? entry.entity_id
+        : undefined;
+    if (typeof entityId === "string" && registryFileName(entityId) !== name) {
+      issues.push(`${name}: must be named ${registryFileName(entityId)} after its entity_id.`);
+    }
+    entries.push(entry);
+    entryFiles.push(name);
+  }
+
+  let subordinates: Subordinate[] = [];
+  try {
+    subordinates = await parseSubordinates({ subordinates: entries }, owner, directory);
+  } catch (error) {
+    if (!(error instanceof SubordinateConfigError)) {
+      throw error;
+    }
+    issues.push(
+      ...error.issues.map((issue) =>
+        issue.replace(
+          /subordinates\[(\d+)\](\.)?/g,
+          (_match, index: string, dot: string | undefined) =>
+            `${entryFiles[Number(index)] ?? "?"}${dot === undefined ? "" : " "}`,
+        ),
+      ),
+    );
+  }
+  if (issues.length > 0) {
+    throw new SubordinateConfigError(directory, issues);
+  }
+  return subordinates;
+}
+
 /** Validates an already-parsed registry document, as startup and every admin change do. */
 export async function parseSubordinates(
   raw: unknown,
@@ -181,7 +262,9 @@ export async function parseSubordinates(
   const issues: string[] = [];
   const subordinates: Subordinate[] = [];
   const seen = new Map<string, number>();
-  const ownerThumbprint = await calculateJwkThumbprint({ ...owner.key.publicJwk }, "sha256");
+  const ownerThumbprints = new Set(
+    await Promise.all(owner.publicKeys.map((key) => calculateJwkThumbprint({ ...key }, "sha256"))),
+  );
 
   for (const [index, entry] of file.data.subordinates.entries()) {
     const at = `subordinates[${index}]`;
@@ -214,7 +297,7 @@ export async function parseSubordinates(
       issues.push(`${at}.entity_types contains duplicates.`);
     }
 
-    const keys = await validateJwks(value.jwks.keys, `${at}.jwks`, ownerThumbprint, issues);
+    const keys = await validateJwks(value.jwks.keys, `${at}.jwks`, ownerThumbprints, issues);
     const metadataPolicy = validateMetadataPolicy(value.metadata_policy, at, issues);
     const constraints = validateConstraints(value.constraints, at, issues);
 
@@ -239,7 +322,7 @@ export async function parseSubordinates(
 async function validateJwks(
   rawKeys: readonly unknown[],
   at: string,
-  ownerThumbprint: string,
+  ownerThumbprints: ReadonlySet<string>,
   issues: string[],
 ): Promise<JWK[]> {
   const keys: JWK[] = [];
@@ -274,7 +357,7 @@ async function validateJwks(
     kids.add(jwk.kid);
     // zod omits absent optional members, so the parsed object is the public JWK.
     const publicJwk: JWK = { ...jwk };
-    if ((await calculateJwkThumbprint(publicJwk, "sha256")) === ownerThumbprint) {
+    if (ownerThumbprints.has(await calculateJwkThumbprint(publicJwk, "sha256"))) {
       issues.push(
         `${keyAt} is the Trust Anchor's own federation key. Subordinates must use their own keys.`,
       );

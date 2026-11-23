@@ -16,7 +16,7 @@ const VERIFIER = "https://capture-wallet.test.example/verifier";
 
 async function owner(): Promise<RegistryOwner> {
   const { config, key } = await createFixture();
-  return { entityId: config.entityId, key };
+  return { entityId: config.entityId, publicKeys: [key.publicJwk] };
 }
 
 async function entry(overrides: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
@@ -124,7 +124,7 @@ describe("parseSubordinates", () => {
   it("rejects the Trust Anchor's own key as a subordinate key", async () => {
     const registryOwner = await owner();
     const issues = await issuesOf(
-      [await entry({ jwks: { keys: [{ ...registryOwner.key.publicJwk }] } })],
+      [await entry({ jwks: { keys: [{ ...registryOwner.publicKeys[0] }] } })],
       registryOwner,
     );
     expect(issues).toMatch(/Trust Anchor's own federation key/);

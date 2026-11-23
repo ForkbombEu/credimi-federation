@@ -14,10 +14,9 @@ import { FederationPath, federationEndpoints } from "./federation.js";
 import type { Fetch } from "./keycheck.js";
 import type { FederationKey } from "./keys.js";
 import { loadOpenApi } from "./openapi.js";
-import { Registry } from "./registry.js";
+import { Registry, type RegistrySources } from "./registry.js";
 import { sendPage } from "./responses.js";
 import { AdminSessions } from "./sessions.js";
-import type { Subordinate } from "./subordinates.js";
 import {
   docsPage,
   DOCS_SCRIPT_URL,
@@ -32,7 +31,8 @@ import {
 export interface AppDependencies {
   readonly config: AppConfig;
   readonly key: FederationKey;
-  readonly subordinates: readonly Subordinate[];
+  /** Both registries, already validated (see loadRegistries). */
+  readonly registries: RegistrySources;
 }
 
 export interface AppOptions {
@@ -80,8 +80,14 @@ export async function buildApp(
   // Read through on every request: an admin change replaces the TrustAnchor.
   const registry = await Registry.create(
     { entityId: config.entityId, key: deps.key, path: config.subordinatesPath },
-    deps.subordinates,
+    deps.registries,
   );
+  for (const member of registry.members.filter((entry) => entry.overridden)) {
+    app.log.warn(
+      { entityId: member.subordinate.entityId },
+      "local registry entry is overridden by the GitHub registry and not served",
+    );
+  }
   const openApi = await loadOpenApi(config.entityId);
   const site: SiteInfo = { federationName: config.federationName, entityId: config.entityId };
   const docsCsp = [

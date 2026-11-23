@@ -31,9 +31,13 @@ async function site() {
         },
       ],
     },
-    { entityId: config.entityId, key },
+    { entityId: config.entityId, publicKeys: [key.publicJwk] },
   );
-  return { app: await buildApp({ config, key, subordinates }), key, subordinates };
+  return {
+    app: await buildApp({ config, key, registries: { local: subordinates, github: [] } }),
+    key,
+    subordinates,
+  };
 }
 
 async function get(app: FastifyInstance, url: string) {

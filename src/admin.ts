@@ -6,7 +6,12 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { checkLiveKeys, type Fetch } from "./keycheck.js";
-import { Registry, RegistryWriteError, UnknownSubordinateError } from "./registry.js";
+import {
+  GitHubManagedError,
+  Registry,
+  RegistryWriteError,
+  UnknownSubordinateError,
+} from "./registry.js";
 import { sendPage } from "./responses.js";
 import {
   AdminSessions,
@@ -131,8 +136,13 @@ export function adminRoutes(app: FastifyInstance, deps: AdminDependencies): void
       if (error instanceof UnknownSubordinateError) {
         return notFound(reply, session, error.entityId);
       }
-      if (error instanceof SubordinateConfigError) {
-        const issues = entryIssues(error.issues, index);
+      const issues =
+        error instanceof GitHubManagedError
+          ? [error.message]
+          : error instanceof SubordinateConfigError
+            ? entryIssues(error.issues, index)
+            : undefined;
+      if (issues !== undefined) {
         return outcome.form === undefined
           ? page(
               reply,
@@ -205,7 +215,7 @@ export function adminRoutes(app: FastifyInstance, deps: AdminDependencies): void
       reply,
       200,
       dashboardPage(site, {
-        subordinates: registry.subordinates,
+        members: registry.members,
         csrfToken: session.csrfToken,
         ...(isNotice(done) && typeof sub === "string"
           ? { notice: { kind: done, subject: sub } }
@@ -257,7 +267,7 @@ export function adminRoutes(app: FastifyInstance, deps: AdminDependencies): void
     if (session === undefined) {
       return reply;
     }
-    const subordinate = findSubordinate(registry, subjectOf(request));
+    const subordinate = findSubordinate(registry.local, subjectOf(request));
     if (subordinate === undefined) {
       return notFound(reply, session, subjectOf(request) ?? "");
     }
@@ -336,7 +346,7 @@ export function adminRoutes(app: FastifyInstance, deps: AdminDependencies): void
     if (session === undefined) {
       return reply;
     }
-    const subordinate = findSubordinate(registry, subjectOf(request));
+    const subordinate = findSubordinate(registry.local, subjectOf(request));
     if (subordinate === undefined) {
       return notFound(reply, session, subjectOf(request) ?? "");
     }
@@ -367,7 +377,10 @@ export function adminRoutes(app: FastifyInstance, deps: AdminDependencies): void
     if (session === undefined) {
       return reply;
     }
-    const subordinate = findSubordinate(registry, subjectOf(request));
+    const subordinate = findSubordinate(
+      registry.members.map((member) => member.subordinate),
+      subjectOf(request),
+    );
     if (subordinate === undefined) {
       return notFound(reply, session, subjectOf(request) ?? "");
     }
@@ -387,10 +400,13 @@ function subjectOf(request: FastifyRequest): string | undefined {
   return typeof sub === "string" ? sub : undefined;
 }
 
-function findSubordinate(registry: Registry, subject: string | undefined): Subordinate | undefined {
+function findSubordinate(
+  subordinates: readonly Subordinate[],
+  subject: string | undefined,
+): Subordinate | undefined {
   return subject === undefined
     ? undefined
-    : registry.subordinates.find((entry) => entry.entityId === subject);
+    : subordinates.find((entry) => entry.entityId === subject);
 }
 
 function indexOrThrow(entries: readonly RegistryEntry[], subject: string): number {

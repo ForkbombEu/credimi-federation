@@ -1,7 +1,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { calculateJwkThumbprint, exportJWK, generateKeyPair, type CryptoKey, type JWK } from "jose";
+import {
+  calculateJwkThumbprint,
+  exportJWK,
+  generateKeyPair,
+  SignJWT,
+  type CryptoKey,
+  type JWK,
+} from "jose";
 import { afterEach } from "vitest";
 import type { AppConfig } from "../src/config.js";
 import { generateFederationKey, type FederationKey } from "../src/keys.js";
@@ -61,4 +68,30 @@ export async function subordinateKey(alg: "ES256" | "PS256" = "ES256"): Promise<
   const jwk = await exportJWK(publicKey);
   const kid = await calculateJwkThumbprint(jwk, "sha256");
   return { publicJwk: { ...jwk, kid, alg, use: "sig" }, privateKey };
+}
+
+/**
+ * The Entity Configuration a subordinate would publish: self-issued, signed
+ * by `signer`, publishing `published`, naming the test Trust Anchor.
+ */
+export async function signEntityConfiguration(
+  signer: SubordinateKey,
+  entityId: string,
+  published: JWK[],
+): Promise<string> {
+  return new SignJWT({
+    jwks: { keys: published },
+    authority_hints: [ENTITY_ID],
+    metadata: { federation_entity: {} },
+  })
+    .setProtectedHeader({
+      alg: "ES256",
+      typ: "entity-statement+jwt",
+      kid: signer.publicJwk.kid ?? "",
+    })
+    .setIssuer(entityId)
+    .setSubject(entityId)
+    .setIssuedAt(nowSeconds())
+    .setExpirationTime(nowSeconds() + 3600)
+    .sign(signer.privateKey);
 }

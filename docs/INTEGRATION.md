@@ -17,7 +17,7 @@ flowchart LR
   W[Wallet / relying party<br/>trusts TA id + JWKS out of band] -->|fetch EC| L
   L[Subordinate<br/>own Entity ID, EC and keys] -->|authority_hints| TA
   W -->|fetch EC + federation_fetch?sub=leaf| TA[Trust Anchor<br/>federation.credimi.io]
-  O[Federation operator] -->|pins public JWKS in subordinates.json| TA
+  O[Subordinate operator] -->|pull request: registry/ file with public JWKS| TA
 ```
 
 The Trust Anchor signs a statement saying "this Entity Identifier uses these
@@ -94,25 +94,37 @@ publish `federation_fetch_endpoint` or `federation_list_endpoint`.
 
 ### 4. Registration of its public federation keys
 
-Send the federation operator, over a channel the operator already trusts
-(signed commit, direct exchange — not just a URL to fetch):
+The usual way is a pull request to this repository adding one file to
+[`registry/`](../registry/README.md), named after the Entity Identifier and
+holding:
 
 - the Entity Identifier,
 - the **public** federation JWK Set (no `d` or other private members),
 - the entity types it will publish.
 
-The operator adds an entry to the registry file (see the README's
-"Registering a subordinate"), runs `task check`, and restarts the service, or,
-on a deployment with the admin area enabled, adds it as a disabled entry at
-`/admin/new`. Before enabling the entry, the operator compares the `kid` values
-with those in the subordinate's live Entity Configuration; the admin area's
-**Check live keys** page does this comparison. A reachable, self-signed Entity
-Configuration is never enough on its own: Trust Chain validation fails if the
-Entity Configuration is signed with a key the Trust Anchor did not pin.
+Publish the Entity Configuration (steps 2 and 3) before opening the pull
+request. The **Registry** workflow validates the file and fetches the live
+Entity Configuration; every check must pass: reachable, issued by the entity
+about itself, signed with a key in the file, publishing exactly the keys in
+the file, naming this Trust Anchor in `authority_hints`, unexpired. The
+checks prove that whoever controls the host publishes those keys; a
+maintainer's merge is the decision to trust the entity. After the merge the
+Trust Anchor is redeployed and serves the Subordinate Statement.
 
-When the subordinate rotates its federation key, it sends the new public key
-first; the operator publishes both keys, and the subordinate switches signing
-only after the Trust Anchor serves the new Subordinate Statement.
+Alternatively, send the same information to the federation operator over a
+channel the operator already trusts (signed commit, direct exchange — not
+just a URL to fetch). The operator adds it to the local registry file (see
+the README's "Registering a subordinate"), runs `task check`, and restarts the
+service, or, on a deployment with the admin area enabled, adds it as a
+disabled entry at `/admin/new` and enables it after the admin area's **Check
+live keys** page passes. A reachable, self-signed Entity Configuration is
+never enough on its own: Trust Chain validation fails if the Entity
+Configuration is signed with a key the Trust Anchor did not pin.
+
+When the subordinate rotates its federation key, it publishes the new public
+key next to the old one in its Entity Configuration and registers both; it
+switches signing only after the Trust Anchor serves the new Subordinate
+Statement, then removes the old key from both places.
 
 ### 5. Protocol-specific federation metadata
 

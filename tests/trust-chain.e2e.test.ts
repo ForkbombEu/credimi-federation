@@ -108,9 +108,9 @@ async function federation(options: {
               },
             ],
     },
-    { entityId: config.entityId, key },
+    { entityId: config.entityId, publicKeys: [key.publicJwk] },
   );
-  const app = await buildApp({ config, key, subordinates });
+  const app = await buildApp({ config, key, registries: { local: subordinates, github: [] } });
   const leafJwt = await leafEntityConfiguration(options.leafSigningKey, [
     options.leafSigningKey.publicJwk,
   ]);

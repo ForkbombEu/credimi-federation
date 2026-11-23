@@ -28,9 +28,12 @@ What it does:
 - Lists its subordinates at `/federation_list`.
 - Shows its configuration on a read-only public website and documents its API
   with OpenAPI 3.1 and Stoplight Elements.
+- Takes new members by **pull request**: each member is one JSON file in
+  [`registry/`](registry/), and a GitHub Actions workflow validates it and
+  checks the member's live Entity Configuration before a maintainer merges.
 - Optionally, for demo and testing deployments, offers a password-protected
   **admin area** at `/admin` to add, edit, enable, disable and delete
-  subordinates without editing files or restarting.
+  local subordinates without editing files or restarting.
 
 ```text
 credimi-federation
@@ -53,8 +56,10 @@ Identifier, Entity Configuration and federation keys.
   `@oidfed/core` 2.0.0 build and sign every Entity Statement (OpenID
   Federation 1.0 final). No federation logic or cryptography is hand-written.
 - `jose` generates the ES256 key and computes its RFC 7638 thumbprint `kid`.
-- No database: membership is a validated JSON file, edited by hand or through
-  the optional admin area; identity is one key file.
+- No database: membership is the GitHub registry directory (one validated
+  JSON file per member, changed by pull request) plus a local registry file
+  (edited by hand or through the optional admin area); identity is one key
+  file.
 - Server-rendered HTML with the Credimi brand assets; no frontend framework.
 - Tests: Vitest. The end-to-end test builds a Trust Chain from a locally
   generated subordinate and verifies it with `@openid-federation/core`
@@ -73,21 +78,21 @@ mise install
 task install
 
 cp .env.example .env
-# For local development, point the two paths at ./data:
+# For local development, point the paths at ./data and ./registry:
 #   FEDERATION_SIGNING_KEY_PATH=./data/keys/federation.jwk
 #   FEDERATION_SUBORDINATES_PATH=./data/subordinates.json
+#   FEDERATION_REGISTRY_DIR=./registry
 
 task init                                    # once: create the federation key
-echo '{"subordinates": []}' > data/subordinates.json
-task check                                   # validate key + registry
+task check                                   # validate key + both registries
 task run                                     # http://localhost:3000
 ```
 
 `./data/` is git-ignored. Restarting with the same files keeps the same
 federation identity; the service never creates or replaces the key itself.
 
-Development checks: `task format`, `task lint`, `task test`, `task build`, or
-all of them with `task ci`.
+Development checks: `task format`, `task lint`, `task test`, `task build`,
+`task validate` (the GitHub registry, offline), or all of them with `task ci`.
 
 ### Environment variables
 
@@ -96,7 +101,8 @@ all of them with `task ci`.
 | `FEDERATION_ENTITY_ID`         | yes        | —                                 | Public `https` origin, e.g. `https://federation.credimi.io` |
 | `FEDERATION_SIGNING_KEY_PATH`  | one of two | —                                 | File holding the private ES256 JWK, mode `0600`             |
 | `FEDERATION_SIGNING_KEY`       | one of two | —                                 | The private ES256 JWK itself (JSON), as a secret            |
-| `FEDERATION_SUBORDINATES_PATH` | yes        | `/data/subordinates.json` (image) | Subordinate registry                                        |
+| `FEDERATION_SUBORDINATES_PATH` | yes        | `/data/subordinates.json` (image) | Local registry (hand-edited or admin-managed)               |
+| `FEDERATION_REGISTRY_DIR`      | no         | `/app/registry` (image)           | GitHub registry directory; empty value turns it off         |
 | `PORT`                         | no         | `3000`                            | Listening port                                              |
 | `FEDERATION_NAME`              | no         | `OpenID Federation Trust Anchor`  | Website title                                               |
 | `FEDERATION_ADMIN_PASSWORD`    | no         | — (admin area off)                | Secret of at least 16 characters; enables `/admin`          |
@@ -147,22 +153,28 @@ it to Coolify as a secret instead:
    build pack, expose port `3000`, and point `federation.credimi.io` at it with
    HTTPS.
 4. Environment variables: `FEDERATION_ENTITY_ID=https://federation.credimi.io`,
-   `FEDERATION_SIGNING_KEY=<the one-line JSON>` marked as a secret,
-   `FEDERATION_SUBORDINATES_PATH=/config/subordinates.json`, and optionally
-   `FEDERATION_NAME`. Do not set `FEDERATION_SIGNING_KEY_PATH`.
-5. Storage: add a **File Mount** at `/config/subordinates.json` with the content
-   `{"subordinates": []}`. It holds only public keys, so editing it in Coolify
-   is fine; redeploy after each change.
-6. Deploy, then check that the `kid` on the homepage matches the one `task init`
-   printed.
+   `FEDERATION_SIGNING_KEY=<the one-line JSON>` marked as a secret, and
+   optionally `FEDERATION_NAME`. Do not set `FEDERATION_SIGNING_KEY_PATH`. The
+   image already sets `FEDERATION_REGISTRY_DIR=/app/registry` (the GitHub
+   registry baked into the image) and
+   `FEDERATION_SUBORDINATES_PATH=/data/subordinates.json` (a missing local
+   registry file is an empty local registry).
+5. Turn on automatic deployment for pushes to `main`, so that every merged
+   registry pull request is live after the next build.
+6. Optional, for entries you do not want in Git: set
+   `FEDERATION_SUBORDINATES_PATH=/config/subordinates.json` and add a **File
+   Mount** there with the content `{"subordinates": []}`. It holds only public
+   keys, so editing it in Coolify is fine; redeploy after each change.
+7. Deploy, then check that the `kid` on the homepage matches the one `task init`
+   printed and the one in `config/trust-anchor.json`.
 
 The private key is then stored, encrypted, in Coolify's database and is visible
 to Coolify administrators. No volume is needed in this setup.
 
 #### Coolify with the admin area (demo and testing)
 
-To manage members from the browser instead of the File Mount, change steps 4
-and 5:
+To manage local members from the browser instead of the File Mount, change
+steps 4 and 6:
 
 - Environment variables: also set `FEDERATION_ADMIN_PASSWORD` as a secret
   (generate one with `openssl rand -base64 24`), and set
@@ -174,8 +186,7 @@ and 5:
   deploy anyway.
 
 Then sign in at `https://federation.credimi.io/admin/login`. For a production
-federation, leave the admin area off and keep the registry in Git, validated
-by `task check` in CI.
+federation, leave the admin area off and rely on the GitHub registry.
 
 ## Key management
 
@@ -201,7 +212,8 @@ credimi-federation cat /data/keys/federation.jwk > backup.jwk`, then encrypt
   Configuration and updated its trust anchor configuration, switch signing to
   the new key, and remove the old key after a further overlap period. The
   library's key provider supports these stages; wiring them to configuration
-  is a future enhancement.
+  is a future enhancement. Also update the public keys in
+  `config/trust-anchor.json`, which CI validates the GitHub registry against.
 
 ### Distributing the Trust Anchor's public keys
 
@@ -219,12 +231,25 @@ direct exchange. The website lists the current key IDs so they can be compared.
 
 ## Registering a subordinate
 
-Membership is the JSON file at `FEDERATION_SUBORDINATES_PATH`; there is no
-public registration endpoint. Each entry pins the subordinate's **public**
-federation keys, obtained from its operator over a trusted channel — never from
-its reachable Entity Configuration alone. Edit the file and restart, or use the
-admin area (see [Quick GUI guide](#admin-area)), which writes the same file.
-See [config/subordinates.example.json](config/subordinates.example.json).
+There is no public registration endpoint. A subordinate is registered in one
+of two places, and each entry pins its **public** federation keys:
+
+- **GitHub registry** (`registry/`, the usual way): the subordinate's operator
+  opens a pull request adding one file named after the Entity Identifier, as
+  [registry/README.md](registry/README.md) explains. The **Registry**
+  workflow builds the validator from the base branch, validates the whole
+  directory, and fetches the live Entity Configuration of every enabled entry
+  the pull request adds or changes. Every check must pass. Merging is the
+  trust decision: the checks prove that whoever controls the host publishes
+  those keys, not who they are. The merged file ships in the next image.
+- **Local registry** (`FEDERATION_SUBORDINATES_PATH`): the operator adds an
+  entry with keys obtained over a trusted channel, by editing the file and
+  restarting or in the admin area (see [Quick GUI guide](#admin-area)). See
+  [config/subordinates.example.json](config/subordinates.example.json).
+
+**GitHub wins**: if both registries hold the same Entity Identifier (ignoring
+a trailing `/`), the GitHub entry is served, and the local one is kept but
+marked as overridden, not served, and logged as a warning at startup.
 
 | Member            | Required | Meaning                                                                                 |
 | ----------------- | -------- | --------------------------------------------------------------------------------------- |
@@ -235,11 +260,14 @@ See [config/subordinates.example.json](config/subordinates.example.json).
 | `metadata_policy` | no       | OpenID Federation 1.0 §6.1 policy, standard operators only                              |
 | `constraints`     | no       | `max_path_length`, `naming_constraints`, `allowed_entity_types` (§6.2)                  |
 
-The file is validated on start and by `task check`; duplicates, private key
-members, the Trust Anchor's own key, unknown members and invalid policies are
-rejected and the service does not start. Restart after editing by hand. The
-admin area applies the same validation to every change and refuses to save an
-invalid one.
+Both registries are validated on start and by `task check`; duplicates,
+private key members, the Trust Anchor's own key, unknown members and invalid
+policies are rejected and the service does not start. The GitHub registry is
+also checked by `task validate` and in CI, against the Trust Anchor's public
+identity in [config/trust-anchor.json](config/trust-anchor.json), so no
+private key is needed there. Restart after editing the local file by hand;
+the admin area applies the same validation to every change and refuses to
+save an invalid one.
 
 ## Quick GUI guide
 
@@ -277,9 +305,14 @@ testing deployments.
 - **Sign in** at `/admin/login` with the admin password. The session lasts
   8 hours or until **Sign out** in the admin bar or a restart. After 10 wrong
   passwords in a minute, sign-in is refused until the minute is over.
-- **Registry** (`/admin`) lists every subordinate with its entity types,
-  status and key IDs, and the actions **Edit**, **Check live keys**,
-  **Enable**/**Disable** and **Delete**.
+- **Registry** (`/admin`) lists every subordinate of both registries with its
+  source, entity types, status and key IDs. Local entries have the actions
+  **Edit**, **Check live keys**, **Enable**/**Disable** and **Delete**.
+  GitHub entries link to their file and offer only **Check live keys**; they
+  change by pull request. A local entry overridden by GitHub is marked
+  "Overridden by GitHub, not served".
+- The admin area refuses to add a local entry, or rename one, to an Entity
+  Identifier the GitHub registry holds.
 - **Add subordinate** asks for the Entity Identifier, entity types (separated
   by spaces or commas), the public keys exactly as the subordinate's operator
   sent them (a JWK Set, an array of JWKs or one JWK), and optionally a metadata
@@ -300,12 +333,13 @@ Entity Identifier.
 
 ## CLI examples
 
-| Command | Example                                | Effect                                              |
-| ------- | -------------------------------------- | --------------------------------------------------- |
-| `init`  | `node dist/cli.js init`                | Create the federation signing key once              |
-| `check` | `node dist/cli.js check`               | Validate configuration, key and registry, then exit |
-| `jwks`  | `node dist/cli.js jwks > ta.jwks.json` | Export the public JWK Set for distribution          |
-| `help`  | `node dist/cli.js help`                | Show usage                                          |
+| Command    | Example                                                                              | Effect                                                               |
+| ---------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `init`     | `node dist/cli.js init`                                                              | Create the federation signing key once                               |
+| `check`    | `node dist/cli.js check`                                                             | Validate configuration, key and both registries, then exit           |
+| `jwks`     | `node dist/cli.js jwks > ta.jwks.json`                                               | Export the public JWK Set for distribution                           |
+| `validate` | `node dist/cli.js validate registry config/trust-anchor.json --live registry/x.json` | Validate the GitHub registry without keys; live-check listed members |
+| `help`     | `node dist/cli.js help`                                                              | Show usage                                                           |
 
 ## API examples
 
@@ -333,8 +367,8 @@ unknown `sub`.
 Each issuer or verifier keeps its own identity and needs: its own federation
 signing keys; its own signed Entity Configuration at
 `<entity_id>/.well-known/openid-federation`; `authority_hints` set to this
-Trust Anchor's Entity Identifier; its public federation keys registered here by
-the operator; protocol metadata (`openid_credential_issuer`,
+Trust Anchor's Entity Identifier; its public federation keys registered here,
+normally by pull request to [`registry/`](registry/README.md); protocol metadata (`openid_credential_issuer`,
 `openid_credential_verifier`, …) in its Entity Configuration; and wallets or
 relying parties configured with this Trust Anchor's identifier and public keys.
 

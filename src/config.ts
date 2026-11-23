@@ -17,7 +17,10 @@ export interface AppConfig {
   readonly entityId: string;
   readonly port: number;
   readonly signingKey: SigningKeySource;
+  /** The local registry file, edited by hand or in the admin area. */
   readonly subordinatesPath: string;
+  /** The GitHub registry directory, one file per subordinate; optional. */
+  readonly registryDir?: string;
   readonly federationName: string;
   /** Shared admin password; the admin area exists only when this is set. */
   readonly adminPassword?: string;
@@ -36,12 +39,14 @@ export const MIN_ADMIN_PASSWORD_LENGTH = 16;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const adminPassword = parseAdminPassword(env[ADMIN_PASSWORD_VARIABLE]);
+  const registryDir = optionalEnv(env, "FEDERATION_REGISTRY_DIR");
   return {
     entityId: parseEntityId(requireEnv(env, "FEDERATION_ENTITY_ID")),
     port: parsePort(env["PORT"]),
     signingKey: signingKeySource(env),
     subordinatesPath: requireEnv(env, "FEDERATION_SUBORDINATES_PATH"),
     federationName: optionalEnv(env, "FEDERATION_NAME") ?? DEFAULT_FEDERATION_NAME,
+    ...(registryDir === undefined ? {} : { registryDir }),
     ...(adminPassword === undefined ? {} : { adminPassword }),
   };
 }

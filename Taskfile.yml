@@ -49,18 +49,25 @@ tasks:
       - node --env-file-if-exists=.env dist/cli.js init
 
   check:
-    desc: Validate the signing key and subordinate configuration without starting
+    desc: Validate the signing key and both registries without starting
     deps: [build]
     cmds:
       - node --env-file-if-exists=.env dist/cli.js check
 
+  validate:
+    desc: Validate the GitHub registry against config/trust-anchor.json (no key needed)
+    deps: [build]
+    cmds:
+      - node dist/cli.js validate registry config/trust-anchor.json
+
   ci:
-    desc: Everything CI runs — formatting, lint, tests and build
+    desc: Everything CI runs — formatting, lint, tests, build and registry validation
     cmds:
       - task: format:check
       - task: lint
       - task: test
       - task: build
+      - task: validate
 
   docker:build:
     desc: Build the production image

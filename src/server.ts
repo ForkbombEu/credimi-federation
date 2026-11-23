@@ -6,17 +6,14 @@
 import { buildApp } from "./app.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { KeyError, loadFederationKey } from "./keys.js";
-import { loadSubordinates, SubordinateConfigError } from "./subordinates.js";
+import { loadRegistries } from "./registry.js";
+import { SubordinateConfigError } from "./subordinates.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const key = await loadFederationKey(config.signingKey);
-  const subordinates = await loadSubordinates(
-    config.subordinatesPath,
-    { entityId: config.entityId, key },
-    { missingIsEmpty: config.adminPassword !== undefined },
-  );
-  const app = await buildApp({ config, key, subordinates }, { logger: true });
+  const registries = await loadRegistries(config, key);
+  const app = await buildApp({ config, key, registries }, { logger: true });
 
   const shutdown = (signal: string): void => {
     app.log.info({ signal }, "shutting down");
@@ -36,7 +33,8 @@ async function main(): Promise<void> {
     {
       entityId: config.entityId,
       kid: key.kid,
-      subordinates: subordinates.filter((entry) => entry.enabled).length,
+      githubSubordinates: registries.github.length,
+      localSubordinates: registries.local.length,
     },
     "trust anchor ready",
   );

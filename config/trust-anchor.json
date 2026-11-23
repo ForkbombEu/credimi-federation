@@ -1,0 +1,16 @@
+{
+  "entity_id": "https://federation.credimi.io",
+  "jwks": {
+    "keys": [
+      {
+        "kty": "EC",
+        "kid": "95J7AyYs3Z8iG76fb5SWoBAKxlMckr6QV_fJ_Qnx9bo",
+        "use": "sig",
+        "alg": "ES256",
+        "crv": "P-256",
+        "x": "2sasAI_nURiuRXeDn6KWiddbw51FP9P4jvo64K8ehak",
+        "y": "D0QN3AQ9RNC1kv2n6ZPEODKchfUdxRx7lQT6799EUDk"
+      }
+    ]
+  }
+}

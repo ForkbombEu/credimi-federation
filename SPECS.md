@@ -129,22 +129,49 @@ credimi-federation (one Node.js process)
   accessible) and refuses to start otherwise. Startup never creates or replaces
   keys. The variable form exists for platforms such as Coolify where a failing
   first start leaves no container in which to run `init`.
-- **Membership.** Subordinates are declared in a JSON file holding each
-  subordinate's Entity Identifier, pinned public federation JWKS, entity
-  types, enabled flag and optional `metadata_policy`/`constraints`. The file
-  is validated at startup; any error aborts startup. Enabled entries are
-  registered with the `TrustAnchor`; disabled ones are shown in the UI but are
-  not served by fetch or list.
+- **Membership.** A subordinate entry holds its Entity Identifier, pinned
+  public federation JWKS, entity types, enabled flag and optional
+  `metadata_policy`/`constraints`. Entries come from two sources:
+  - The **GitHub registry**: the directory named by `FEDERATION_REGISTRY_DIR`
+    (`registry/` in this repository, copied into the image). One JSON file per
+    subordinate, holding one entry, named after its Entity Identifier: remove
+    `https://` and a trailing `/`, replace every run of characters other than
+    `A–Z`, `a–z`, `0–9`, `.` and `-` with `_`, append `.json`. It changes only
+    through pull requests and is read-only at runtime.
+  - The **local registry**: the JSON file named by
+    `FEDERATION_SUBORDINATES_PATH`, edited by hand or in the admin area.
+
+  Each source is validated at startup on its own; any error aborts startup.
+  The served registry is every GitHub entry plus every local entry whose
+  Entity Identifier (ignoring a trailing `/`) is not in the GitHub registry:
+  **GitHub wins**. An overridden local entry stays in the local file, is
+  marked as overridden in the admin area, is not served, and is logged as a
+  warning at startup. Enabled served entries are registered with the
+  `TrustAnchor`; disabled ones are shown in the UI but are not served by
+  fetch or list. A missing local file means an empty local registry when the
+  admin area is enabled or `FEDERATION_REGISTRY_DIR` is set.
+- **Pull request checks.** `.github/workflows/registry.yml` runs on
+  `pull_request` with a read-only token and no secrets. It runs
+  `credimi-federation validate` on the whole GitHub registry against
+  `config/trust-anchor.json` (the Trust Anchor's Entity Identifier and public
+  JWKS, so no private key is needed in CI), using the same validation as
+  startup plus the file-name rule. It then runs the live key check (below) on
+  every member file the pull request adds or modifies whose entry is enabled;
+  every check must pass. Disabled entries are not live-checked because they
+  are not served, so no entry becomes served through a pull request without
+  passing every check. `task ci` runs the offline validation on every push.
 - **Administration (demo and testing).** When `FEDERATION_ADMIN_PASSWORD` is
   set, `/admin` lets one operator add, edit, enable, disable and delete
-  subordinates. Every change goes through the same validation as startup; it
-  is written to the registry file atomically (temporary file in the same
-  directory, `fsync`, `rename`), one change at a time, and only then does a
-  new `TrustAnchor` replace the running one. No restart is needed. A change
-  that fails validation or cannot be written leaves the file and the served
-  statements untouched. With the admin area enabled, a missing registry file
-  means an empty registry; the file is created on the first save. Every change
-  is logged with the action and the Entity Identifier.
+  entries of the local registry. Every change goes through the same
+  validation as startup; it is written to the local registry file atomically
+  (temporary file in the same directory, `fsync`, `rename`), one change at a
+  time, and only then does a new `TrustAnchor` replace the running one. No
+  restart is needed. A change that fails validation or cannot be written
+  leaves the file and the served statements untouched. GitHub entries are
+  shown read-only with a link to their file; the admin area refuses to add an
+  entry, or rename one, to an Entity Identifier the GitHub registry holds.
+  Overridden local entries can still be disabled or deleted. Every change is
+  logged with the action and the Entity Identifier.
 - **Admin authentication.** One shared password from the
   `FEDERATION_ADMIN_PASSWORD` secret (at least 16 characters), compared in
   constant time. A successful login creates a random session held in memory
@@ -153,29 +180,36 @@ credimi-federation (one Node.js process)
   request carries a per-session CSRF token. After 10 failed logins in one
   minute, further attempts are refused until the minute ends. The admin area
   is not linked from the public pages.
-- **Key pinning stays out of band.** The admin area never copies keys from a
-  subordinate's Entity Configuration. The operator pastes the public JWKS
-  received over a trusted channel; a separate "Check live keys" page fetches
-  the subordinate's Entity Configuration and reports whether it is signed by a
-  pinned key, which pinned and published keys differ, and whether its
-  `authority_hints` name this Trust Anchor.
+- **Key pinning stays out of band.** Neither the admin area nor CI copies keys
+  from a subordinate's Entity Configuration. In the admin area the operator
+  pastes the public JWKS received over a trusted channel. In a pull request
+  the keys come from the pull request's author, who is not a trusted channel:
+  the live key check proves that whoever controls the Entity Identifier's
+  host publishes an Entity Configuration signed with the proposed key, not who
+  they are. Merging is the trust decision, made by a maintainer. The live key
+  check (admin "Check live keys" page and `validate --live`) fetches the
+  subordinate's Entity Configuration and checks that it is reachable,
+  self-issued, signed by a pinned key, publishing exactly the pinned keys,
+  naming this Trust Anchor in `authority_hints`, and unexpired.
 - **No impersonation.** The service never holds subordinate private keys and
   never publishes Entity Configurations for other entities. It only signs
   Subordinate Statements about pinned public keys.
-- **No database.** All state is the key file plus the subordinate file.
-  Admin sessions are in memory only.
+- **No database.** All state is the key file, the GitHub registry directory
+  and the local registry file. Admin sessions are in memory only.
 
 ## CLI, web, and API interfaces
 
 CLI (`credimi-federation`, also `node dist/cli.js`):
 
-| Command | Behaviour                                                                                |
-| ------- | ---------------------------------------------------------------------------------------- |
-| `init`  | Generate the ES256 federation key at `FEDERATION_SIGNING_KEY_PATH`; refuse to overwrite. |
-| `check` | Validate the key and subordinate file exactly as startup does, then exit.                |
-| `jwks`  | Print the Trust Anchor's public JWKS (for out-of-band distribution).                     |
+| Command    | Behaviour                                                                                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init`     | Generate the ES256 federation key at `FEDERATION_SIGNING_KEY_PATH`; refuse to overwrite.                                                           |
+| `check`    | Validate the key and both registries exactly as startup does, then exit.                                                                           |
+| `jwks`     | Print the Trust Anchor's public JWKS (for out-of-band distribution).                                                                               |
+| `validate` | `validate <registry-dir> <trust-anchor.json> [--live <member-file>...]`: validate a GitHub registry without any key; optionally live-check members |
 
-`check` and `jwks` accept either key source.
+`check` and `jwks` accept either key source. `validate` reads no environment
+variable and needs no private key.
 
 Public HTTP (all `GET`, no authentication, no write operations):
 
@@ -216,14 +250,16 @@ Environment variables (validated at startup; invalid values abort):
 | `FEDERATION_ENTITY_ID`         | yes      | —                                | `https` origin of the Trust Anchor, no path/query/fragment |
 | `FEDERATION_SIGNING_KEY_PATH`  | one of 2 | —                                | Private ES256 JWK file                                     |
 | `FEDERATION_SIGNING_KEY`       | one of 2 | —                                | Private ES256 JWK JSON, supplied as a secret               |
-| `FEDERATION_SUBORDINATES_PATH` | yes      | —                                | Subordinate registry JSON file                             |
+| `FEDERATION_SUBORDINATES_PATH` | yes      | —                                | Local registry JSON file                                   |
+| `FEDERATION_REGISTRY_DIR`      | no       | — (no GitHub registry)           | GitHub registry directory, one file per subordinate        |
 | `PORT`                         | no       | `3000`                           | TCP port; the service binds `0.0.0.0`                      |
 | `FEDERATION_NAME`              | no       | `OpenID Federation Trust Anchor` | Display name on the website                                |
 | `FEDERATION_ADMIN_PASSWORD`    | no       | — (admin area off)               | Secret, ≥ 16 characters; enables `/admin`                  |
 
-The Docker image sets `FEDERATION_SUBORDINATES_PATH=/data/subordinates.json`.
-It sets no key variable, because setting both key sources is refused.
-`.env.example` documents a complete local configuration.
+The Docker image sets `FEDERATION_SUBORDINATES_PATH=/data/subordinates.json`
+and `FEDERATION_REGISTRY_DIR=/app/registry`. It sets no key variable, because
+setting both key sources is refused. `.env.example` documents a complete local
+configuration.
 
 ## Build, format, lint, and test commands
 
@@ -241,13 +277,23 @@ All commands run through Task; `mise install` provides Node.js, pnpm and Task.
 | `task run`          | build, then `node --env-file-if-exists=.env dist/server.js`                                                                      |
 | `task init`         | build, then `dist/cli.js init`                                                                                                   |
 | `task check`        | build, then `dist/cli.js check`                                                                                                  |
-| `task ci`           | format check, lint, test, build                                                                                                  |
+| `task validate`     | build, then `dist/cli.js validate registry config/trust-anchor.json` (offline)                                                   |
+| `task ci`           | format check, lint, test, build, validate                                                                                        |
 | `task docker:build` | `docker build -t credimi-federation:local .`                                                                                     |
+
+GitHub Actions workflows, using the latest major version of every action
+(`actions/checkout@v7`, `jdx/mise-action@v5`, checked on 23 November 2026):
+
+| Workflow       | Trigger                                                 | Runs                                                       |
+| -------------- | ------------------------------------------------------- | ---------------------------------------------------------- |
+| `ci.yml`       | push to `main`, every pull request                      | `task ci`; Docker image build                              |
+| `registry.yml` | pull requests touching `registry/` or the TA descriptor | `validate` plus `--live` on added/modified enabled members |
 
 ## Production and Docker execution
 
 - Multi-stage `Dockerfile` on `node:26.13.1-alpine`; the runtime stage holds
-  only `dist/`, production `node_modules`, `public/` and `openapi/`.
+  only `dist/`, production `node_modules`, `public/`, `openapi/` and
+  `registry/`.
 - Runs as the image's non-root `node` user (uid 1000).
 - `/data` is a declared volume owned by `node`; when the file key source is
   used it holds `keys/federation.jwk` (mode `0600` in a `0700` directory) and
@@ -257,8 +303,8 @@ All commands run through Task; `mise install` provides Node.js, pnpm and Task.
 -v <volume>:/data <image> node dist/cli.js init`, or generate the key
   elsewhere and pass it as the `FEDERATION_SIGNING_KEY` secret (the Coolify
   setup in the README, which needs no volume). Starting without a key fails
-  with a clear error; so does starting without a subordinate file, unless the
-  admin area is enabled.
+  with a clear error; so does starting without a local registry file, unless
+  the admin area is enabled or `FEDERATION_REGISTRY_DIR` is set.
 - With the admin area enabled, the registry must live in a writable directory
   on a persistent volume (for example `/data/subordinates.json`). A
   single-file bind mount such as a Coolify File Mount cannot be replaced by
@@ -271,15 +317,16 @@ All commands run through Task; `mise install` provides Node.js, pnpm and Task.
 
 ## Important directories
 
-| Path       | Contents                                                                |
-| ---------- | ----------------------------------------------------------------------- |
-| `src/`     | TypeScript sources                                                      |
-| `tests/`   | Vitest suites                                                           |
-| `openapi/` | `openapi.yaml`, the authoritative API description                       |
-| `public/`  | Runtime static assets: `brand/` (copy of `brand/`), `app.css`, `app.js` |
-| `brand/`   | Canonical Credimi design assets (do not edit logos)                     |
-| `config/`  | Example subordinate registry (no real keys)                             |
-| `docs/`    | Template notes and the federation integration guide                     |
+| Path        | Contents                                                                |
+| ----------- | ----------------------------------------------------------------------- |
+| `src/`      | TypeScript sources                                                      |
+| `tests/`    | Vitest suites                                                           |
+| `openapi/`  | `openapi.yaml`, the authoritative API description                       |
+| `public/`   | Runtime static assets: `brand/` (copy of `brand/`), `app.css`, `app.js` |
+| `brand/`    | Canonical Credimi design assets (do not edit logos)                     |
+| `config/`   | Example local registry (no real keys) and `trust-anchor.json`           |
+| `registry/` | GitHub registry: one JSON file per subordinate, added by pull request   |
+| `docs/`     | Template notes and the federation integration guide                     |
 
 Runtime asset locations: `public/brand/style.css`, `public/brand/fonts/`,
 `public/brand/logos/` are byte-identical copies of `brand/`; tests enforce the
@@ -299,12 +346,18 @@ logo SHA-256 pins from `DESIGN.md` §1 and byte equality of every copied file.
 - Never generate or replace the federation key during normal startup.
 - Never derive URLs from request headers.
 - Never add an unauthenticated write or registration endpoint. The admin area
-  is the only write path; it is off unless `FEDERATION_ADMIN_PASSWORD` is set.
+  is the only runtime write path; it is off unless `FEDERATION_ADMIN_PASSWORD`
+  is set. The GitHub registry changes only through merged pull requests.
 - The admin area is a demo and testing convenience. A production deployment
-  should manage the registry in Git, validate it with `task check` in CI and
-  deploy on merge, leaving the admin area off.
+  should rely on the GitHub registry only and leave the admin area off.
 - Never pin a subordinate key taken from its Entity Configuration; keys are
-  pasted by the operator after an out-of-band exchange.
+  pasted by the operator after an out-of-band exchange, or proposed in a pull
+  request that passes the live key check and is merged by a maintainer.
+- `registry/` and `config/trust-anchor.json` are deployment data for the
+  Credimi federation, not protocol logic; code never reads them by a
+  hardcoded path, only through `FEDERATION_REGISTRY_DIR` and CLI arguments.
+- Every GitHub Actions `uses:` reference names the latest major version of
+  the action at the time of the change.
 - Never hold or publish subordinate private keys.
 - Protocol logic must not hardcode `federation.credimi.io` or any Credimi
   entity identifier; those appear only in examples and documentation.

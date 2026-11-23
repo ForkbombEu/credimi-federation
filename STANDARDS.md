@@ -41,9 +41,12 @@ Entities and multi-level hierarchies, `signed_jwks_uri`/`jwks_uri`
 publication of federation keys. These endpoints are not advertised and return
 `404 not_found`.
 
-The optional admin area (see `SPECS.md`) is operator tooling for editing the
-subordinate registry. It is not Automatic or Explicit Registration: entities
-cannot register themselves, and keys are pinned only by the operator.
+The optional admin area and the pull-request-managed `registry/` directory
+(see `SPECS.md`) are operator tooling for maintaining the subordinate
+registry. Neither is Automatic or Explicit Registration (§12): no protocol
+endpoint accepts registrations, and an entity proposed by pull request is
+served only after its live Entity Configuration passes the key check and a
+maintainer merges it.
 
 List-filter notes (behaviour of `@oidfed/authority` 2.0.0, verified by tests):
 

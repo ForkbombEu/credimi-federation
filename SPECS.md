@@ -150,6 +150,7 @@ credimi-federation (one Node.js process)
   `TrustAnchor`; disabled ones are shown in the UI but are not served by
   fetch or list. A missing local file means an empty local registry when the
   admin area is enabled or `FEDERATION_REGISTRY_DIR` is set.
+
 - **Pull request checks.** `.github/workflows/registry.yml` runs on
   `pull_request` for changes under `registry/`, with a read-only token and no
   secrets. It builds the validator from the **base branch** and reads

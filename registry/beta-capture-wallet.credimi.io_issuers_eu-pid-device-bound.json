@@ -1,0 +1,18 @@
+{
+  "entity_id": "https://beta-capture-wallet.credimi.io/issuers/eu-pid-device-bound",
+  "enabled": true,
+  "entity_types": ["openid_credential_issuer", "oauth_authorization_server"],
+  "jwks": {
+    "keys": [
+      {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "a8G6JzOAIN--pJez5UQx_C-gvY9nYbdFv-YsAwomxzE",
+        "y": "P1NJGZCHWheNg1VV68yO-dHNS4f-VL06ofBwK6vwNFM",
+        "kid": "930kycKsjQFRwu1hoH3Tx1uTYZS5LDVuE40YSmso5wM",
+        "alg": "ES256",
+        "use": "sig"
+      }
+    ]
+  }
+}
